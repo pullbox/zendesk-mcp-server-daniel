@@ -3,6 +3,17 @@ import json
 import urllib.request
 import urllib.parse
 import base64
+import logging
+
+logger = logging.getLogger("zendesk-mcp-client")
+logging.basicConfig(
+    level=logging.INFO,
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler("zendesk-mcp.log")
+    ],
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
 
 from zenpy import Zenpy
 from zenpy.lib.api_objects import Comment
@@ -84,8 +95,18 @@ class ZendeskClient:
         except Exception as e:
             raise Exception(f"Failed to post comment on ticket {ticket_id}: {str(e)}")
 
-    ## Old version 
-    # def get_tickets(self, page: int = 1, per_page: int = 25, sort_by: str = 'created_at', sort_order: str = 'desc') -> Dict[str, Any]:
+#### New Version to strip micro seconds from the timestamp
+    def _zendesk_ts(self, dt: "datetime") -> str:
+        """
+        Format datetime for Zendesk search:
+        - no microseconds
+        - includes timezone offset (+00:00 etc.)
+        """
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.replace(microsecond=0)
+        return dt.isoformat()  # e.g. 2026-02-27T22:32:42+00:00
+
 
     ## new version allowing to filter by org and agent
     def get_tickets(
@@ -146,7 +167,7 @@ class ZendeskClient:
                 updated_before = None
                 if stale_hours is not None:
                     dt = datetime.now(timezone.utc) - timedelta(hours=int(stale_hours))
-                    updated_before = dt.isoformat().replace("+00:00", "Z")
+                    updated_before = self._zendesk_ts(dt)
 
                 # If using stale detection, default to open-ish tickets unless caller requests otherwise
                 # This keeps out solved/closed tickets
@@ -156,7 +177,7 @@ class ZendeskClient:
                 # Apply updated constraints
                 if last_hours is not None:
                     dt = datetime.now(timezone.utc) - timedelta(hours=int(last_hours))
-                    updated_since = dt.isoformat().replace("+00:00", "Z")
+                    updated_since = self._zendesk_ts(dt)
 
                 if updated_before:
                     query_parts.append(f"updated<{updated_before}")
@@ -187,6 +208,9 @@ class ZendeskClient:
                 req = urllib.request.Request(url)
                 req.add_header("Authorization", self.auth_header)
                 req.add_header("Content-Type", "application/json")
+                # NEW
+                logger.info(f"Zendesk request URL: {url}")
+                logger.info(f"Zendesk search query: {query if 'query' in locals() else 'tickets.json'}")
 
                 with urllib.request.urlopen(req) as response:
                     data = json.loads(response.read().decode())
