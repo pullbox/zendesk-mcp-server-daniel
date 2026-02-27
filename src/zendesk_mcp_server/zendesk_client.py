@@ -97,7 +97,9 @@ class ZendeskClient:
         agent: Optional[str] = None,
         organization: Optional[str] = None,
         updated_since: Optional[str] = None,
-        last_hours: Optional[int] = None, #NEW
+        last_hours: Optional[int] = None, # NEW
+        stale_hours: Optional[int] = None, # NEW
+        include_solved: bool = False, # NEW
     ) -> Dict[str, Any]:
         """
         Get tickets with optional filtering.
@@ -123,7 +125,8 @@ class ZendeskClient:
             per_page = min(per_page, 100)
 
             # If any filters are present, use the Search API
-            if agent or organization or updated_since:
+            # NEW UPDATED
+            if agent or organization or updated_since or last_hours is not None or stale_hours is not None:
                 query_parts = ["type:ticket"]
 
                 if agent:
@@ -138,15 +141,33 @@ class ZendeskClient:
                     org_str = str(organization).strip()
                     query_parts.append(f'organization:"{org_str}"')
 
-                # NEW: relative time conversion
+                # NEW: stale detector - show tickets NOT updated recently
+                # stale_hours=24  => updated < (now - 24h)
+                updated_before = None
+                if stale_hours is not None:
+                    dt = datetime.now(timezone.utc) - timedelta(hours=int(stale_hours))
+                    updated_before = dt.isoformat().replace("+00:00", "Z")
+
+                # If using stale detection, default to open-ish tickets unless caller requests otherwise
+                # This keeps out solved/closed tickets
+                if stale_hours is not None and not include_solved:
+                    query_parts.append("status<solved")
+
+                # Apply updated constraints
                 if last_hours is not None:
                     dt = datetime.now(timezone.utc) - timedelta(hours=int(last_hours))
                     updated_since = dt.isoformat().replace("+00:00", "Z")
+
+                if updated_before:
+                    query_parts.append(f"updated<{updated_before}")
+
 
                 if updated_since:
                     # Zendesk Search supports updated>YYYY-MM-DD and updated>YYYY-MM-DDTHH:MM:SSZ
                     since_str = str(updated_since).strip()
                     query_parts.append(f"updated>{since_str}")
+
+
 
                 query = " ".join(query_parts)
 
@@ -202,6 +223,9 @@ class ZendeskClient:
                         "agent": agent,
                         "organization": organization,
                         "updated_since": updated_since,
+                        "last_hours": last_hours,
+                        "stale_hours": stale_hours,
+                        "include_solved": include_solved,
                     },
                     "has_more": data.get("next_page") is not None,
                     "next_page": page + 1 if data.get("next_page") else None,

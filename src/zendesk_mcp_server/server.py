@@ -204,6 +204,17 @@ async def handle_list_tools() -> list[types.Tool]:
                         "type": "integer",
                         "description": "Relative filter. Example: 24 = updated in last 24 hours"
                     },
+                    # NEW
+                    "stale_hours": {
+                        "type": "integer",
+                        "description": "Stale detector. Example: 24 = tickets not updated in the last 24 hours (updated < now-24h)."
+                    },
+                    # NEW
+                    "include_solved": {
+                        "type": "boolean",
+                        "description": "Include solved/closed tickets in stale detection results.",
+                        "default": False
+                    },
                 },
                 "required": []
             }
@@ -312,6 +323,8 @@ async def handle_call_tool(
             organization = arguments.get("organization") if arguments else None
             updated_since = arguments.get("updated_since") if arguments else None
             last_hours = arguments.get("last_hours") if arguments else None
+            stale_hours = arguments.get("stale_hours") if arguments else None
+            include_solved = arguments.get("include_solved", False) if arguments else False
 
             # NEW
             tickets = zendesk_client.get_tickets(
@@ -319,10 +332,12 @@ async def handle_call_tool(
                 per_page=per_page,
                 sort_by=sort_by,
                 sort_order=sort_order,
-                agent=agent,
-                organization=organization,
-                updated_since=updated_since,
+                agent=agent, # NEW
+                organization=organization, # NEW
+                updated_since=updated_since, # NEW
                 last_hours=last_hours #NEW
+                stale_hours=stale_hours,                 # NEW
+                include_solved=include_solved            # NEW
             )
             return [types.TextContent(
                 type="text",
