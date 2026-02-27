@@ -335,7 +335,7 @@ async def handle_call_tool(
                 agent=agent, # NEW
                 organization=organization, # NEW
                 updated_since=updated_since, # NEW
-                last_hours=last_hours #NEW
+                last_hours=last_hours, #NEW
                 stale_hours=stale_hours,                 # NEW
                 include_solved=include_solved            # NEW
             )
