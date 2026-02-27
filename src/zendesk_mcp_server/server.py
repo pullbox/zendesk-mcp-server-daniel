@@ -183,7 +183,27 @@ async def handle_list_tools() -> list[types.Tool]:
                         "type": "string",
                         "description": "Sort order (asc or desc)",
                         "default": "desc"
-                    }
+                    },
+                    # NEW:
+                    "agent": {
+                        "type": "string",
+                        "description": "Optional assignee filter. Can be agent id, email, or name (partial ok).",
+                    },
+                    # NEW:
+                    "organization": {
+                        "type": "string",
+                        "description": "Optional organization name filter (partial name ok).",
+                    },
+                    # NEW:
+                    "updated_since": {
+                        "type": "string",
+                        "description": "ISO date/datetime filter. Example: 2026-02-26 or 2026-02-26T10:00:00Z",
+                    },
+                    # NEW:
+                    "last_hours": {
+                        "type": "integer",
+                        "description": "Relative filter. Example: 24 = updated in last 24 hours"
+                    },
                 },
                 "required": []
             }
@@ -287,12 +307,22 @@ async def handle_call_tool(
             per_page = arguments.get("per_page", 25) if arguments else 25
             sort_by = arguments.get("sort_by", "created_at") if arguments else "created_at"
             sort_order = arguments.get("sort_order", "desc") if arguments else "desc"
+            # NEW
+            agent = arguments.get("agent") if arguments else None
+            organization = arguments.get("organization") if arguments else None
+            updated_since = arguments.get("updated_since") if arguments else None
+            last_hours = arguments.get("last_hours") if arguments else None
 
+            # NEW
             tickets = zendesk_client.get_tickets(
                 page=page,
                 per_page=per_page,
                 sort_by=sort_by,
-                sort_order=sort_order
+                sort_order=sort_order,
+                agent=agent,
+                organization=organization,
+                updated_since=updated_since,
+                last_hours=last_hours #NEW
             )
             return [types.TextContent(
                 type="text",

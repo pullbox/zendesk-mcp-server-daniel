@@ -1,4 +1,4 @@
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 import json
 import urllib.request
 import urllib.parse
@@ -7,6 +7,7 @@ import base64
 from zenpy import Zenpy
 from zenpy.lib.api_objects import Comment
 from zenpy.lib.api_objects import Ticket as ZenpyTicket
+from datetime import datetime, timedelta, timezone
 
 
 class ZendeskClient:
@@ -83,75 +84,180 @@ class ZendeskClient:
         except Exception as e:
             raise Exception(f"Failed to post comment on ticket {ticket_id}: {str(e)}")
 
-    def get_tickets(self, page: int = 1, per_page: int = 25, sort_by: str = 'created_at', sort_order: str = 'desc') -> Dict[str, Any]:
+    ## Old version 
+    # def get_tickets(self, page: int = 1, per_page: int = 25, sort_by: str = 'created_at', sort_order: str = 'desc') -> Dict[str, Any]:
+
+    ## new version allowing to filter by org and agent
+    def get_tickets(
+        self,
+        page: int = 1,
+        per_page: int = 25,
+        sort_by: str = "created_at",
+        sort_order: str = "desc",
+        agent: Optional[str] = None,
+        organization: Optional[str] = None,
+        updated_since: Optional[str] = None,
+        last_hours: Optional[int] = None, #NEW
+    ) -> Dict[str, Any]:
         """
-        Get the latest tickets with proper pagination support using direct API calls.
+        Get tickets with optional filtering.
+
+        - If agent/organization/updated_since filters are provided, uses Zendesk Search API:
+            GET /api/v2/search.json?query=type:ticket ...
+        because /tickets.json doesn't support these filters.
+        - If no filters are provided, uses /tickets.json (original behavior).
 
         Args:
             page: Page number (1-based)
             per_page: Number of tickets per page (max 100)
-            sort_by: Field to sort by (created_at, updated_at, priority, status)
-            sort_order: Sort order (asc or desc)
+            sort_by: Field to sort by (created_at, updated_at, priority, status) for /tickets.json
+            sort_order: Sort order (asc or desc) for /tickets.json
+            agent: Optional assignee filter (id, email, or name)
+            organization: Optional organization name filter (partial name ok)
+            updated_since: Optional ISO date/datetime filter for search: e.g. 2026-02-26 or 2026-02-26T10:00:00Z
 
         Returns:
             Dict containing tickets and pagination info
         """
         try:
-            # Cap at reasonable limit
             per_page = min(per_page, 100)
 
-            # Build URL with parameters for offset pagination
+            # If any filters are present, use the Search API
+            if agent or organization or updated_since:
+                query_parts = ["type:ticket"]
+
+                if agent:
+                    agent_str = str(agent).strip()
+                    # If numeric, use assignee_id for deterministic filtering
+                    if agent_str.isdigit():
+                        query_parts.append(f"assignee_id:{agent_str}")
+                    else:
+                        query_parts.append(f'assignee:"{agent_str}"')
+
+                if organization:
+                    org_str = str(organization).strip()
+                    query_parts.append(f'organization:"{org_str}"')
+
+                # NEW: relative time conversion
+                if last_hours is not None:
+                    dt = datetime.now(timezone.utc) - timedelta(hours=int(last_hours))
+                    updated_since = dt.isoformat().replace("+00:00", "Z")
+
+                if updated_since:
+                    # Zendesk Search supports updated>YYYY-MM-DD and updated>YYYY-MM-DDTHH:MM:SSZ
+                    since_str = str(updated_since).strip()
+                    query_parts.append(f"updated>{since_str}")
+
+                query = " ".join(query_parts)
+
+                params = {
+                    "query": query,
+                    "page": str(page),
+                    "per_page": str(per_page),
+                }
+
+                # NOTE: Some Zendesk instances reject sort params on search.
+                # If you get HTTP 400, remove these two lines.
+                params["sort_by"] = sort_by
+                params["sort_order"] = sort_order
+
+                url = f"{self.base_url}/search.json?{urllib.parse.urlencode(params)}"
+
+                req = urllib.request.Request(url)
+                req.add_header("Authorization", self.auth_header)
+                req.add_header("Content-Type", "application/json")
+
+                with urllib.request.urlopen(req) as response:
+                    data = json.loads(response.read().decode())
+
+                results = data.get("results", [])
+
+                ticket_list = []
+                for item in results:
+                    # Guard: only tickets
+                    if item.get("result_type") not in (None, "ticket"):
+                        continue
+
+                    ticket_list.append({
+                        "id": item.get("id"),
+                        "subject": item.get("subject"),
+                        "status": item.get("status"),
+                        "priority": item.get("priority"),
+                        "description": item.get("description"),
+                        "created_at": item.get("created_at"),
+                        "updated_at": item.get("updated_at"),
+                        "requester_id": item.get("requester_id"),
+                        "assignee_id": item.get("assignee_id"),
+                        "organization_id": item.get("organization_id"),
+                    })
+
+                return {
+                    "tickets": ticket_list,
+                    "page": page,
+                    "per_page": per_page,
+                    "count": len(ticket_list),
+                    "sort_by": sort_by,
+                    "sort_order": sort_order,
+                    "filters": {
+                        "agent": agent,
+                        "organization": organization,
+                        "updated_since": updated_since,
+                    },
+                    "has_more": data.get("next_page") is not None,
+                    "next_page": page + 1 if data.get("next_page") else None,
+                    "previous_page": page - 1 if page > 1 else None,
+                }
+
+            # No filters -> original /tickets.json behavior
             params = {
-                'page': str(page),
-                'per_page': str(per_page),
-                'sort_by': sort_by,
-                'sort_order': sort_order
+                "page": str(page),
+                "per_page": str(per_page),
+                "sort_by": sort_by,
+                "sort_order": sort_order,
             }
-            query_string = urllib.parse.urlencode(params)
-            url = f"{self.base_url}/tickets.json?{query_string}"
+            url = f"{self.base_url}/tickets.json?{urllib.parse.urlencode(params)}"
 
-            # Create request with auth header
             req = urllib.request.Request(url)
-            req.add_header('Authorization', self.auth_header)
-            req.add_header('Content-Type', 'application/json')
+            req.add_header("Authorization", self.auth_header)
+            req.add_header("Content-Type", "application/json")
 
-            # Make the API request
             with urllib.request.urlopen(req) as response:
                 data = json.loads(response.read().decode())
 
-            tickets_data = data.get('tickets', [])
+            tickets_data = data.get("tickets", [])
 
-            # Process tickets to return only essential fields
             ticket_list = []
             for ticket in tickets_data:
                 ticket_list.append({
-                    'id': ticket.get('id'),
-                    'subject': ticket.get('subject'),
-                    'status': ticket.get('status'),
-                    'priority': ticket.get('priority'),
-                    'description': ticket.get('description'),
-                    'created_at': ticket.get('created_at'),
-                    'updated_at': ticket.get('updated_at'),
-                    'requester_id': ticket.get('requester_id'),
-                    'assignee_id': ticket.get('assignee_id')
+                    "id": ticket.get("id"),
+                    "subject": ticket.get("subject"),
+                    "status": ticket.get("status"),
+                    "priority": ticket.get("priority"),
+                    "description": ticket.get("description"),
+                    "created_at": ticket.get("created_at"),
+                    "updated_at": ticket.get("updated_at"),
+                    "requester_id": ticket.get("requester_id"),
+                    "assignee_id": ticket.get("assignee_id"),
+                    "organization_id": ticket.get("organization_id"),
                 })
 
             return {
-                'tickets': ticket_list,
-                'page': page,
-                'per_page': per_page,
-                'count': len(ticket_list),
-                'sort_by': sort_by,
-                'sort_order': sort_order,
-                'has_more': data.get('next_page') is not None,
-                'next_page': page + 1 if data.get('next_page') else None,
-                'previous_page': page - 1 if data.get('previous_page') and page > 1 else None
+                "tickets": ticket_list,
+                "page": page,
+                "per_page": per_page,
+                "count": len(ticket_list),
+                "sort_by": sort_by,
+                "sort_order": sort_order,
+                "has_more": data.get("next_page") is not None,
+                "next_page": page + 1 if data.get("next_page") else None,
+                "previous_page": page - 1 if data.get("previous_page") and page > 1 else None,
             }
+
         except urllib.error.HTTPError as e:
             error_body = e.read().decode() if e.fp else "No response body"
-            raise Exception(f"Failed to get latest tickets: HTTP {e.code} - {e.reason}. {error_body}")
+            raise Exception(f"Failed to get tickets: HTTP {e.code} - {e.reason}. {error_body}")
         except Exception as e:
-            raise Exception(f"Failed to get latest tickets: {str(e)}")
+            raise Exception(f"Failed to get tickets: {str(e)}")
 
     def get_all_articles(self) -> Dict[str, Any]:
         """
