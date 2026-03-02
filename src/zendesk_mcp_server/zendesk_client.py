@@ -42,12 +42,68 @@ class ZendeskClient:
         encoded_credentials = base64.b64encode(credentials.encode()).decode('ascii')
         self.auth_header = f"Basic {encoded_credentials}"
 
+    def get_ticket_fields(self) -> List[Dict[str, Any]]:
+        """
+        Fetch all ticket fields (standard + custom) from Zendesk.
+        Useful for discovering custom field IDs and names.
+        """
+        try:
+            url = f"{self.base_url}/ticket_fields.json"
+            req = urllib.request.Request(url)
+            req.add_header("Authorization", self.auth_header)
+            req.add_header("Content-Type", "application/json")
+            with urllib.request.urlopen(req) as response:
+                data = json.loads(response.read().decode())
+            return [
+                {
+                    "id": f.get("id"),
+                    "title": f.get("title"),
+                    "type": f.get("type"),
+                    "active": f.get("active"),
+                }
+                for f in data.get("ticket_fields", [])
+            ]
+        except Exception as e:
+            raise Exception(f"Failed to get ticket fields: {str(e)}")
+
+    def _get_field_map(self) -> Dict[int, str]:
+        """
+        Return a cached id->title mapping for all ticket fields.
+        Re-fetches on each ZendeskClient instance (not across restarts).
+        """
+        if not hasattr(self, "_field_map_cache"):
+            fields = self.get_ticket_fields()
+            self._field_map_cache = {f["id"]: f["title"] for f in fields}
+        return self._field_map_cache
+
+    def _resolve_custom_fields(self, raw: list) -> Dict[str, Any]:
+        """
+        Convert a raw custom_fields list [{id, value}, ...] from the REST API
+        into a {field_title: value} dict, omitting null values.
+        """
+        if not raw:
+            return {}
+        field_map = self._get_field_map()
+        return {
+            field_map.get(cf["id"], str(cf["id"])): cf["value"]
+            for cf in raw
+            if cf.get("value") is not None
+        }
+
     def get_ticket(self, ticket_id: int) -> Dict[str, Any]:
         """
-        Query a ticket by its ID
+        Query a ticket by its ID, including resolved custom field values.
         """
         try:
             ticket = self.client.tickets(id=ticket_id)
+            field_map = self._get_field_map()
+            custom_fields = {}
+            for cf in (getattr(ticket, "custom_fields", None) or []):
+                cf_id = getattr(cf, "id", None)
+                cf_value = getattr(cf, "value", None)
+                if cf_value is not None and cf_id is not None:
+                    name = field_map.get(cf_id, str(cf_id))
+                    custom_fields[name] = cf_value
             return {
                 'id': ticket.id,
                 'subject': ticket.subject,
@@ -58,7 +114,8 @@ class ZendeskClient:
                 'updated_at': str(ticket.updated_at),
                 'requester_id': ticket.requester_id,
                 'assignee_id': ticket.assignee_id,
-                'organization_id': ticket.organization_id
+                'organization_id': ticket.organization_id,
+                'custom_fields': custom_fields,
             }
         except Exception as e:
             raise Exception(f"Failed to get ticket {ticket_id}: {str(e)}")
@@ -234,6 +291,7 @@ class ZendeskClient:
                         "requester_id": item.get("requester_id"),
                         "assignee_id": item.get("assignee_id"),
                         "organization_id": item.get("organization_id"),
+                        "custom_fields": self._resolve_custom_fields(item.get("custom_fields", [])),
                     })
 
                 return {
@@ -287,6 +345,7 @@ class ZendeskClient:
                     "requester_id": ticket.get("requester_id"),
                     "assignee_id": ticket.get("assignee_id"),
                     "organization_id": ticket.get("organization_id"),
+                    "custom_fields": self._resolve_custom_fields(ticket.get("custom_fields", [])),
                 })
 
             return {
