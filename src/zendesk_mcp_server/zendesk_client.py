@@ -6,12 +6,16 @@ import base64
 import logging
 
 logger = logging.getLogger("zendesk-mcp-client")
+_log_handlers = [logging.StreamHandler()]
+
+try:
+    _log_handlers.append(logging.FileHandler("zendesk-mcp.log"))
+except OSError:
+    logger.warning("File logging is unavailable; continuing with stdout logging only.")
+
 logging.basicConfig(
     level=logging.INFO,
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler("zendesk-mcp.log")
-    ],
+    handlers=_log_handlers,
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
@@ -70,10 +74,15 @@ class ZendeskClient:
         """
         Return a cached id->title mapping for all ticket fields.
         Re-fetches on each ZendeskClient instance (not across restarts).
+        Falls back to an empty map if the ticket_fields API is unavailable.
         """
         if not hasattr(self, "_field_map_cache"):
-            fields = self.get_ticket_fields()
-            self._field_map_cache = {f["id"]: f["title"] for f in fields}
+            try:
+                fields = self.get_ticket_fields()
+                self._field_map_cache = {f["id"]: f["title"] for f in fields}
+            except Exception as e:
+                logger.warning(f"Could not load ticket field map (custom fields will show IDs): {e}")
+                self._field_map_cache = {}
         return self._field_map_cache
 
     def _resolve_custom_fields(self, raw: list) -> Dict[str, Any]:

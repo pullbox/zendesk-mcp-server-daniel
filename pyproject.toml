@@ -5,7 +5,7 @@ description = "A simple Zendesk MCP server"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "mcp>=1.1.2",
+    "mcp==1.26.0",
     "python-dotenv>=1.0.1",
     "zenpy>=2.0.56",
 ]
@@ -16,3 +16,4 @@ build-backend = "hatchling.build"
 
 [project.scripts]
 zendesk = "zendesk_mcp_server:main"
+zendesk-test = "zendesk_mcp_server.test:main"

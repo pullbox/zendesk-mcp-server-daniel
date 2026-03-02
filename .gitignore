@@ -15,3 +15,5 @@ wheels/
 .env
 .env.prod
 .env.dev
+.env.danielzendesk
+.DS_Store

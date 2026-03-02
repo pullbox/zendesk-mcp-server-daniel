@@ -105,8 +105,73 @@ Fetch the latest tickets with pagination support
   - `per_page` (integer, optional): Number of tickets per page, max 100 (defaults to 25)
   - `sort_by` (string, optional): Field to sort by - created_at, updated_at, priority, or status (defaults to created_at)
   - `sort_order` (string, optional): Sort order - asc or desc (defaults to desc)
+  - `agent` (string, optional): Assignee filter. Can be an id, email, or name
+  - `organization` (string, optional): Organization name filter
+  - `updated_since` (string, optional): ISO date/datetime filter
+  - `last_hours` (integer, optional): Relative filter. Example: `5` means tickets updated in the last 5 hours
+  - `stale_hours` (integer, optional): Relative stale filter. Example: `24` means tickets not updated in the last 24 hours
+  - `include_solved` (boolean, optional): Include solved/closed tickets when using `stale_hours`
 
-- Output: Returns a list of tickets with essential fields including id, subject, status, priority, description, timestamps, and assignee information, along with pagination metadata
+- Client return shape: `ZendeskClient.get_tickets(...)` returns a JSON object, not a bare array.
+
+```json
+{
+  "tickets": [
+    {
+      "id": 101,
+      "subject": "New billing issue",
+      "status": "open",
+      "priority": "high",
+      "description": "Customer cannot update card",
+      "created_at": "2026-03-02T13:00:00Z",
+      "updated_at": "2026-03-02T14:45:00Z",
+      "requester_id": 2001,
+      "assignee_id": 3001,
+      "organization_id": 4001,
+      "custom_fields": {
+        "Team": "billing"
+      }
+    }
+  ],
+  "page": 1,
+  "per_page": 25,
+  "count": 1,
+  "sort_by": "created_at",
+  "sort_order": "desc",
+  "filters": {
+    "agent": null,
+    "organization": null,
+    "updated_since": "2026-03-02T10:30:00+00:00",
+    "last_hours": 5,
+    "stale_hours": null,
+    "include_solved": false
+  },
+  "has_more": false,
+  "next_page": null,
+  "previous_page": null
+}
+```
+
+- Notes:
+  - `tickets` is always an array of ticket objects.
+  - `count` is the number of ticket objects returned in the current response page.
+  - `filters` is included for search-based calls such as `last_hours`, `stale_hours`, `agent`, `organization`, or `updated_since`.
+  - `custom_fields` is always an object keyed by field name when field metadata is available. It is not returned as the raw Zendesk list format.
+  - Search results that are not tickets are filtered out before this object is returned.
+  - When no filters are supplied and the client falls back to `/tickets.json`, the top-level shape is the same except `filters` is not included.
+
+- MCP server return shape: the `get_tickets` tool wraps that same object inside a single MCP text response whose `text` value is JSON.
+
+```json
+[
+  {
+    "type": "text",
+    "text": "{\n  \"tickets\": [...],\n  \"page\": 1,\n  \"per_page\": 25,\n  \"count\": 1,\n  \"sort_by\": \"created_at\",\n  \"sort_order\": \"desc\",\n  \"filters\": {\n    \"last_hours\": 5\n  },\n  \"has_more\": false,\n  \"next_page\": null,\n  \"previous_page\": null\n}"
+  }
+]
+```
+
+- Tests covering the expected format live in [`src/zendesk_mcp_server/ticket_test.py`](./src/zendesk_mcp_server/ticket_test.py).
 
 ### get_ticket
 

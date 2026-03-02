@@ -1,0 +1,85 @@
+2026-03-02 09:23:26,944 - INFO - zendesk mcp server started
+2026-03-02 09:23:27,161 - INFO - Processing request of type ListToolsRequest
+2026-03-02 09:23:27,162 - INFO - Processing request of type ListPromptsRequest
+2026-03-02 09:23:27,163 - INFO - Processing request of type ListResourcesRequest
+2026-03-02 10:47:52,194 - INFO - Processing request of type CallToolRequest
+2026-03-02 10:48:25,295 - INFO - Processing request of type CallToolRequest
+2026-03-02 10:48:25,297 - INFO - Zendesk request URL: https://appdome.zendesk.com/api/v2/search.json?query=type%3Aticket+updated%3E2026-02-28T15%3A48%3A25%2B00%3A00&page=1&per_page=100&sort_by=priority&sort_order=desc
+2026-03-02 10:48:25,297 - INFO - Zendesk search query: type:ticket updated>2026-02-28T15:48:25+00:00
+2026-03-02 10:54:58,914 - INFO - Processing request of type CallToolRequest
+2026-03-02 10:54:58,915 - INFO - Zendesk request URL: https://appdome.zendesk.com/api/v2/search.json?query=type%3Aticket+updated%3E2026-02-28T15%3A54%3A58%2B00%3A00&page=1&per_page=100&sort_by=created_at&sort_order=desc
+2026-03-02 10:54:58,915 - INFO - Zendesk search query: type:ticket updated>2026-02-28T15:54:58+00:00
+2026-03-02 11:07:49,973 - INFO - Processing request of type CallToolRequest
+2026-03-02 11:07:49,975 - INFO - Zendesk request URL: https://appdome.zendesk.com/api/v2/search.json?query=type%3Aticket+updated%3E2026-02-28&page=1&per_page=100&sort_by=created_at&sort_order=desc
+2026-03-02 11:07:49,975 - INFO - Zendesk search query: type:ticket updated>2026-02-28
+2026-03-02 12:11:07,556 - INFO - Processing request of type CallToolRequest
+2026-03-02 12:11:07,568 - INFO - Zendesk request URL: https://appdome.zendesk.com/api/v2/search.json?query=type%3Aticket+status%3Csolved+updated%3C2026-02-25T17%3A11%3A07%2B00%3A00&page=1&per_page=100&sort_by=updated_at&sort_order=asc
+2026-03-02 12:11:07,568 - INFO - Zendesk search query: type:ticket status<solved updated<2026-02-25T17:11:07+00:00
+2026-03-02 12:11:13,519 - INFO - Processing request of type CallToolRequest
+2026-03-02 12:11:13,519 - INFO - Zendesk request URL: https://appdome.zendesk.com/api/v2/search.json?query=type%3Aticket+status%3Csolved+updated%3C2026-02-25T17%3A11%3A13%2B00%3A00&page=2&per_page=100&sort_by=updated_at&sort_order=asc
+2026-03-02 12:11:13,519 - INFO - Zendesk search query: type:ticket status<solved updated<2026-02-25T17:11:13+00:00
+2026-03-02 14:14:01,919 - INFO - zendesk mcp server started
+2026-03-02 14:14:29,832 - INFO - Processing request of type CallToolRequest
+2026-03-02 14:14:29,836 - INFO - Zendesk request URL: https://appdome.zendesk.com/api/v2/search.json?query=type%3Aticket+status%3Csolved+updated%3C2026-02-25T19%3A14%3A29%2B00%3A00&page=1&per_page=100&sort_by=updated_at&sort_order=asc
+2026-03-02 14:14:29,836 - INFO - Zendesk search query: type:ticket status<solved updated<2026-02-25T19:14:29+00:00
+2026-03-02 14:15:24,522 - INFO - zendesk mcp server started
+2026-03-02 14:15:24,853 - INFO - Processing request of type ListToolsRequest
+2026-03-02 14:15:24,854 - INFO - Processing request of type ListPromptsRequest
+2026-03-02 14:15:24,855 - INFO - Processing request of type ListResourcesRequest
+2026-03-02 14:17:55,130 - INFO - zendesk mcp server started
+2026-03-02 14:17:55,177 - INFO - Processing request of type ListToolsRequest
+2026-03-02 14:17:55,178 - INFO - Processing request of type ListPromptsRequest
+2026-03-02 14:17:55,179 - INFO - Processing request of type ListResourcesRequest
+2026-03-02 14:18:40,580 - INFO - Processing request of type CallToolRequest
+2026-03-02 14:18:40,582 - INFO - Zendesk request URL: https://appdome.zendesk.com/api/v2/search.json?query=type%3Aticket+updated%3E2026-03-02T15%3A18%3A40%2B00%3A00&page=1&per_page=50&sort_by=created_at&sort_order=desc
+2026-03-02 14:18:40,582 - INFO - Zendesk search query: type:ticket updated>2026-03-02T15:18:40+00:00
+2026-03-02 14:19:16,736 - INFO - Processing request of type CallToolRequest
+2026-03-02 14:19:25,160 - INFO - Processing request of type CallToolRequest
+2026-03-02 14:19:28,723 - INFO - Processing request of type CallToolRequest
+2026-03-02 14:19:33,998 - INFO - Processing request of type CallToolRequest
+2026-03-02 14:19:37,100 - INFO - Processing request of type CallToolRequest
+2026-03-02 14:19:42,813 - INFO - Processing request of type CallToolRequest
+2026-03-02 14:19:46,034 - INFO - Processing request of type CallToolRequest
+2026-03-02 14:19:52,885 - INFO - Processing request of type CallToolRequest
+2026-03-02 14:19:56,070 - INFO - Processing request of type CallToolRequest
+2026-03-02 14:20:03,731 - INFO - Processing request of type CallToolRequest
+2026-03-02 14:24:20,031 - INFO - zendesk mcp server started
+2026-03-02 14:24:20,043 - INFO - Processing request of type ListToolsRequest
+2026-03-02 14:24:20,044 - INFO - Processing request of type ListPromptsRequest
+2026-03-02 14:24:20,045 - INFO - Processing request of type ListResourcesRequest
+2026-03-02 14:24:40,159 - INFO - Processing request of type CallToolRequest
+2026-03-02 14:24:40,161 - INFO - Zendesk request URL: https://appdome.zendesk.com/api/v2/search.json?query=type%3Aticket+updated%3E2026-03-02T15%3A24%3A40%2B00%3A00&page=1&per_page=100&sort_by=created_at&sort_order=desc
+2026-03-02 14:24:40,161 - INFO - Zendesk search query: type:ticket updated>2026-03-02T15:24:40+00:00
+2026-03-02 14:26:28,787 - INFO - Processing request of type CallToolRequest
+2026-03-02 15:03:48,964 - INFO - Processing request of type CallToolRequest
+2026-03-02 15:15:59,791 - INFO - Processing request of type CallToolRequest
+2026-03-02 15:15:59,793 - INFO - Zendesk request URL: https://appdome.zendesk.com/api/v2/search.json?query=type%3Aticket+updated%3E2026-02-28T20%3A15%3A59%2B00%3A00&page=1&per_page=100&sort_by=created_at&sort_order=desc
+2026-03-02 15:15:59,793 - INFO - Zendesk search query: type:ticket updated>2026-02-28T20:15:59+00:00
+2026-03-02 15:20:32,566 - INFO - Processing request of type CallToolRequest
+2026-03-02 15:20:32,567 - INFO - Zendesk request URL: https://appdome.zendesk.com/api/v2/search.json?query=type%3Aticket+updated%3E2026-02-28T20%3A20%3A32%2B00%3A00&page=1&per_page=100&sort_by=created_at&sort_order=desc
+2026-03-02 15:20:32,568 - INFO - Zendesk search query: type:ticket updated>2026-02-28T20:20:32+00:00
+2026-03-02 15:33:37,479 - INFO - zendesk mcp server started
+2026-03-02 15:33:37,749 - INFO - Processing request of type ListToolsRequest
+2026-03-02 15:33:37,750 - INFO - Processing request of type ListPromptsRequest
+2026-03-02 15:33:37,750 - INFO - Processing request of type ListResourcesRequest
+2026-03-02 15:46:52,894 - INFO - Processing request of type CallToolRequest
+2026-03-02 15:46:52,898 - INFO - Zendesk request URL: https://appdome.zendesk.com/api/v2/search.json?query=type%3Aticket+updated%3E2026-03-02T15%3A46%3A52%2B00%3A00&page=1&per_page=50&sort_by=created_at&sort_order=desc
+2026-03-02 15:46:52,898 - INFO - Zendesk search query: type:ticket updated>2026-03-02T15:46:52+00:00
+2026-03-02 15:51:26,623 - INFO - zendesk mcp server started
+2026-03-02 15:51:26,695 - INFO - Processing request of type ListToolsRequest
+2026-03-02 15:51:26,696 - INFO - Processing request of type ListPromptsRequest
+2026-03-02 15:51:26,697 - INFO - Processing request of type ListResourcesRequest
+2026-03-02 15:54:48,262 - INFO - Processing request of type CallToolRequest
+2026-03-02 15:54:48,266 - INFO - Zendesk request URL: https://appdome.zendesk.com/api/v2/search.json?query=type%3Aticket+updated%3E2026-03-02T15%3A54%3A48%2B00%3A00&page=1&per_page=100&sort_by=created_at&sort_order=desc
+2026-03-02 15:54:48,266 - INFO - Zendesk search query: type:ticket updated>2026-03-02T15:54:48+00:00
+2026-03-02 17:40:17,425 - INFO - zendesk mcp server started
+2026-03-02 17:45:34,276 - INFO - zendesk mcp server started
+2026-03-02 17:45:34,293 - INFO - Zendesk request URL: https://example.zendesk.com/api/v2/search.json?query=type%3Aticket+updated%3E2026-03-02T10%3A30%3A00%2B00%3A00&page=1&per_page=25&sort_by=created_at&sort_order=desc
+2026-03-02 17:45:34,293 - INFO - Zendesk search query: type:ticket updated>2026-03-02T10:30:00+00:00
+2026-03-02 17:50:34,749 - INFO - zendesk mcp server started
+2026-03-02 17:50:34,763 - INFO - zendesk mcp server started
+2026-03-02 17:50:34,780 - INFO - Zendesk request URL: https://example.zendesk.com/api/v2/search.json?query=type%3Aticket+updated%3E2026-03-02T10%3A30%3A00%2B00%3A00&page=1&per_page=25&sort_by=created_at&sort_order=desc
+2026-03-02 17:50:34,780 - INFO - Zendesk search query: type:ticket updated>2026-03-02T10:30:00+00:00
+2026-03-02 17:53:45,784 - INFO - zendesk mcp server started
+2026-03-02 17:53:45,799 - INFO - Zendesk request URL: https://appdome.zendesk.com/api/v2/search.json?query=type%3Aticket+updated%3E2026-03-02T17%3A53%3A45%2B00%3A00&page=1&per_page=25&sort_by=created_at&sort_order=desc
+2026-03-02 17:53:45,799 - INFO - Zendesk search query: type:ticket updated>2026-03-02T17:53:45+00:00

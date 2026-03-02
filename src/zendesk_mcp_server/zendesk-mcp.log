@@ -1,0 +1,5 @@
+2026-03-02 17:13:49,371 - INFO - Zendesk request URL: https://example.zendesk.com/api/v2/search.json?query=type%3Aticket+updated%3E2026-03-02T10%3A30%3A00%2B00%3A00&page=1&per_page=25&sort_by=created_at&sort_order=desc
+2026-03-02 17:13:49,372 - INFO - Zendesk search query: type:ticket updated>2026-03-02T10:30:00+00:00
+2026-03-02 17:15:10,054 - INFO - Zendesk request URL: https://example.zendesk.com/api/v2/search.json?query=type%3Aticket+updated%3E2026-03-02T10%3A30%3A00%2B00%3A00&page=1&per_page=25&sort_by=created_at&sort_order=desc
+2026-03-02 17:15:10,055 - INFO - Zendesk search query: type:ticket updated>2026-03-02T10:30:00+00:00
+2026-03-02 17:15:10,091 - INFO - zendesk mcp server started
