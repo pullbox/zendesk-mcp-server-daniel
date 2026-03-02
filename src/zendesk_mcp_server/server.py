@@ -257,6 +257,15 @@ async def handle_list_tools() -> list[types.Tool]:
             }
         ),
         types.Tool(
+            name="get_ticket_fields",
+            description="List all Zendesk ticket fields (standard and custom), including their IDs, names, and types. Use this to discover custom field IDs such as 'Engineering ETA' or 'Escalation Status'.",
+            inputSchema={
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        ),
+        types.Tool(
             name="update_ticket",
             description="Update fields on an existing Zendesk ticket (e.g., status, priority, assignee_id)",
             inputSchema={
@@ -366,6 +375,13 @@ async def handle_call_tool(
             return [types.TextContent(
                 type="text",
                 text=f"Comment created successfully: {result}"
+            )]
+
+        elif name == "get_ticket_fields":
+            fields = zendesk_client.get_ticket_fields()
+            return [types.TextContent(
+                type="text",
+                text=json.dumps(fields, indent=2)
             )]
 
         elif name == "update_ticket":
