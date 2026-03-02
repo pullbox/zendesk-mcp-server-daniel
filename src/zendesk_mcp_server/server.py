@@ -28,6 +28,54 @@ zendesk_client = ZendeskClient(
 mcp = FastMCP("Zendesk Server")
 server = mcp
 
+
+TITLE_REVIEW_POLICY_TEMPLATE = """
+You are reviewing Zendesk ticket titles for naming-policy compliance.
+
+Your task is to evaluate whether each ticket title follows the expected structure and is clear enough for internal support workflows.
+
+Naming policy:
+A Zendesk ticket title should generally follow one of these formats:
+- <Customer Name> | OS Version | Ticket Subject
+- <Customer Name> | Feature | Ticket Subject
+- <Customer Name> | Third Party Tool | Ticket Subject
+
+Allowed variations:
+- Reasonable variations of the above are acceptable if the structure is still clear.
+- Ignore case-only differences such as iOS vs IOS.
+- If the ticket is a trial ticket, the word "Trial" may appear before the customer name.
+- Minor wording differences are acceptable if the title still clearly communicates:
+  1. who the customer is
+  2. what platform, feature, or integration is involved
+  3. what the issue or request is
+
+Validation rules:
+- A title is VALID if it clearly contains these core elements in a structured and readable format.
+- A title is INVALID if it is missing a key element, is ambiguous, is poorly structured, or does not follow the expected segmented pattern closely enough.
+- Prefer practical judgment over rigid literal matching.
+- Do not fail a title only because of capitalization differences.
+- Do not invent missing facts. If information is missing from the title, mark it invalid and explain what is missing.
+
+When reviewing a title, return one line each and exactly:
+Validation: VALID or INVALID
+Reason: <brief explanation>
+Suggested Title: <only if invalid>
+
+Be consistent and concise.
+If multiple tickets are reviewed, also include:
+Summary: <count valid> valid, <count invalid> invalid
+"""
+
+REVIEW_SINGLE_TICKET_TEMPLATE = """
+Use the ticket title review policy to review Zendesk ticket #{ticket_id}.
+
+Instructions:
+- Fetch the ticket first.
+- Evaluate only the ticket title unless other ticket details are needed to understand obvious ambiguity.
+- Apply the review policy exactly.
+- Return the result in the required format.
+"""
+
 TICKET_ANALYSIS_TEMPLATE = """
 You are a helpful Zendesk support analyst. You've been asked to analyze ticket #{ticket_id}.
 
@@ -100,6 +148,28 @@ def analyze_ticket_prompt(
     name="draft-ticket-response",
     description="Draft a professional response to a Zendesk ticket",
 )
+
+@mcp.prompt(
+    name="ticket-title-review-policy",
+    description="Define the policy for reviewing Zendesk ticket title structure",
+)
+def ticket_title_review_policy_prompt() -> str:
+    return TITLE_REVIEW_POLICY_TEMPLATE.strip()
+
+@mcp.prompt(
+    name="review-ticket-title",
+    description="Review a specific Zendesk ticket title using the title review policy",
+)
+def review_ticket_title_prompt(
+    ticket_id: Annotated[int, Field(description="The Zendesk ticket ID to review")],
+) -> str:
+    return (
+        TITLE_REVIEW_POLICY_TEMPLATE.strip()
+        + "\n\n"
+        + REVIEW_SINGLE_TICKET_TEMPLATE.format(ticket_id=ticket_id).strip()
+    )
+
+
 def draft_ticket_response_prompt(
     ticket_id: Annotated[int, Field(description="The ID of the ticket to respond to")],
 ) -> str:
