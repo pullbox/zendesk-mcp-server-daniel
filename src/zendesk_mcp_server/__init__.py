@@ -1,8 +1,7 @@
-from . import server
-
-
 def main():
+    from . import server
+
     server.main()
 
 
-__all__ = ["main", "server"]
+__all__ = ["main"]

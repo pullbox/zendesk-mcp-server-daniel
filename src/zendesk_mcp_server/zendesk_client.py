@@ -1,5 +1,6 @@
 from typing import Dict, Any, List, Optional
 import json
+import urllib.error
 import urllib.request
 import urllib.parse
 import base64
@@ -46,6 +47,13 @@ class ZendeskClient:
         encoded_credentials = base64.b64encode(credentials.encode()).decode('ascii')
         self.auth_header = f"Basic {encoded_credentials}"
 
+    def _json_get(self, url: str, timeout: int = 30) -> Dict[str, Any]:
+        req = urllib.request.Request(url)
+        req.add_header("Authorization", self.auth_header)
+        req.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            return json.loads(response.read().decode())
+
     def get_ticket_fields(self) -> List[Dict[str, Any]]:
         """
         Fetch all ticket fields (standard + custom) from Zendesk.
@@ -53,11 +61,9 @@ class ZendeskClient:
         """
         try:
             url = f"{self.base_url}/ticket_fields.json"
-            req = urllib.request.Request(url)
-            req.add_header("Authorization", self.auth_header)
-            req.add_header("Content-Type", "application/json")
-            with urllib.request.urlopen(req) as response:
-                data = json.loads(response.read().decode())
+            logger.info("Fetching Zendesk ticket fields")
+            data = self._json_get(url)
+            logger.info("Fetched Zendesk ticket fields successfully")
             return [
                 {
                     "id": f.get("id"),
@@ -68,7 +74,36 @@ class ZendeskClient:
                 for f in data.get("ticket_fields", [])
             ]
         except Exception as e:
+            logger.error(f"Failed to get Zendesk ticket fields: {e}")
             raise Exception(f"Failed to get ticket fields: {str(e)}")
+
+    def get_ticket_field_definitions(self) -> List[Dict[str, Any]]:
+        """
+        Fetch full ticket field definitions so option metadata can be resolved dynamically.
+        """
+        try:
+            url = f"{self.base_url}/ticket_fields.json"
+            logger.info("Fetching Zendesk ticket field definitions")
+            data = self._json_get(url)
+            logger.info("Fetched Zendesk ticket field definitions successfully")
+            return data.get("ticket_fields", [])
+        except Exception as e:
+            logger.error(f"Failed to get Zendesk ticket field definitions: {e}")
+            raise Exception(f"Failed to get ticket field definitions: {str(e)}")
+
+    def get_ticket_field_options(self, ticket_field_id: int) -> List[Dict[str, Any]]:
+        """
+        Fetch selectable options for a specific ticket field.
+        """
+        try:
+            url = f"{self.base_url}/ticket_fields/{ticket_field_id}/options.json"
+            logger.info(f"Fetching Zendesk ticket field options for field {ticket_field_id}")
+            data = self._json_get(url)
+            logger.info(f"Fetched Zendesk ticket field options for field {ticket_field_id} successfully")
+            return data.get("custom_field_options", [])
+        except Exception as e:
+            logger.error(f"Failed to get Zendesk ticket field options for field {ticket_field_id}: {e}")
+            raise Exception(f"Failed to get ticket field options for field {ticket_field_id}: {str(e)}")
 
     def _get_field_map(self) -> Dict[int, str]:
         """
@@ -104,29 +139,34 @@ class ZendeskClient:
         Query a ticket by its ID, including resolved custom field values.
         """
         try:
-            ticket = self.client.tickets(id=ticket_id)
-            field_map = self._get_field_map()
-            custom_fields = {}
-            for cf in (getattr(ticket, "custom_fields", None) or []):
-                cf_id = getattr(cf, "id", None)
-                cf_value = getattr(cf, "value", None)
-                if cf_value is not None and cf_id is not None:
-                    name = field_map.get(cf_id, str(cf_id))
-                    custom_fields[name] = cf_value
-            return {
-                'id': ticket.id,
-                'subject': ticket.subject,
-                'description': ticket.description,
-                'status': ticket.status,
-                'priority': ticket.priority,
-                'created_at': str(ticket.created_at),
-                'updated_at': str(ticket.updated_at),
-                'requester_id': ticket.requester_id,
-                'assignee_id': ticket.assignee_id,
-                'organization_id': ticket.organization_id,
+            logger.info(f"Fetching Zendesk ticket {ticket_id}")
+            data = self._json_get(f"{self.base_url}/tickets/{ticket_id}.json")
+            ticket = data.get("ticket", {})
+            custom_fields = self._resolve_custom_fields(ticket.get("custom_fields", []))
+            result = {
+                'id': ticket.get('id'),
+                'subject': ticket.get('subject'),
+                'description': ticket.get('description'),
+                'status': ticket.get('status'),
+                'priority': ticket.get('priority'),
+                'created_at': ticket.get('created_at'),
+                'updated_at': ticket.get('updated_at'),
+                'requester_id': ticket.get('requester_id'),
+                'assignee_id': ticket.get('assignee_id'),
+                'organization_id': ticket.get('organization_id'),
                 'custom_fields': custom_fields,
             }
+            logger.info(f"Fetched Zendesk ticket {ticket_id} successfully")
+            return result
+        except urllib.error.HTTPError as e:
+            error_body = e.read().decode() if e.fp else "No response body"
+            logger.error(f"Failed to fetch Zendesk ticket {ticket_id}: HTTP {e.code} - {e.reason}. {error_body}")
+            raise Exception(f"Failed to get ticket {ticket_id}: HTTP {e.code} - {e.reason}. {error_body}")
+        except urllib.error.URLError as e:
+            logger.error(f"Failed to fetch Zendesk ticket {ticket_id}: {e}")
+            raise Exception(f"Failed to get ticket {ticket_id}: {str(e)}")
         except Exception as e:
+            logger.error(f"Failed to fetch Zendesk ticket {ticket_id}: {e}")
             raise Exception(f"Failed to get ticket {ticket_id}: {str(e)}")
 
     def get_ticket_comments(self, ticket_id: int) -> List[Dict[str, Any]]:
@@ -134,16 +174,34 @@ class ZendeskClient:
         Get all comments for a specific ticket.
         """
         try:
-            comments = self.client.tickets.comments(ticket=ticket_id)
-            return [{
-                'id': comment.id,
-                'author_id': comment.author_id,
-                'body': comment.body,
-                'html_body': comment.html_body,
-                'public': comment.public,
-                'created_at': str(comment.created_at)
-            } for comment in comments]
+            logger.info(f"Fetching Zendesk comments for ticket {ticket_id}")
+            comments: List[Dict[str, Any]] = []
+            url = f"{self.base_url}/tickets/{ticket_id}/comments.json"
+
+            while url:
+                data = self._json_get(url)
+                for comment in data.get("comments", []):
+                    comments.append({
+                        'id': comment.get('id'),
+                        'author_id': comment.get('author_id'),
+                        'body': comment.get('body'),
+                        'html_body': comment.get('html_body'),
+                        'public': comment.get('public'),
+                        'created_at': comment.get('created_at')
+                    })
+                url = data.get("next_page")
+
+            logger.info(f"Fetched {len(comments)} Zendesk comments for ticket {ticket_id}")
+            return comments
+        except urllib.error.HTTPError as e:
+            error_body = e.read().decode() if e.fp else "No response body"
+            logger.error(f"Failed to fetch comments for ticket {ticket_id}: HTTP {e.code} - {e.reason}. {error_body}")
+            raise Exception(f"Failed to get comments for ticket {ticket_id}: HTTP {e.code} - {e.reason}. {error_body}")
+        except urllib.error.URLError as e:
+            logger.error(f"Failed to fetch comments for ticket {ticket_id}: {e}")
+            raise Exception(f"Failed to get comments for ticket {ticket_id}: {str(e)}")
         except Exception as e:
+            logger.error(f"Failed to fetch comments for ticket {ticket_id}: {e}")
             raise Exception(f"Failed to get comments for ticket {ticket_id}: {str(e)}")
 
     def post_comment(self, ticket_id: int, comment: str, public: bool = True) -> str:
@@ -274,12 +332,10 @@ class ZendeskClient:
                 req = urllib.request.Request(url)
                 req.add_header("Authorization", self.auth_header)
                 req.add_header("Content-Type", "application/json")
-                # NEW
-                logger.info(f"Zendesk request URL: {url}")
+                logger.info(f"Fetching Zendesk tickets from search API: {url}")
                 logger.info(f"Zendesk search query: {query if 'query' in locals() else 'tickets.json'}")
-
-                with urllib.request.urlopen(req) as response:
-                    data = json.loads(response.read().decode())
+                data = self._json_get(url)
+                logger.info(f"Fetched {len(data.get('results', []))} raw search results from Zendesk")
 
                 results = data.get("results", [])
 
@@ -294,13 +350,8 @@ class ZendeskClient:
                         "subject": item.get("subject"),
                         "status": item.get("status"),
                         "priority": item.get("priority"),
-                        "description": item.get("description"),
                         "created_at": item.get("created_at"),
                         "updated_at": item.get("updated_at"),
-                        "requester_id": item.get("requester_id"),
-                        "assignee_id": item.get("assignee_id"),
-                        "organization_id": item.get("organization_id"),
-                        "custom_fields": self._resolve_custom_fields(item.get("custom_fields", [])),
                     })
 
                 return {
@@ -331,13 +382,9 @@ class ZendeskClient:
                 "sort_order": sort_order,
             }
             url = f"{self.base_url}/tickets.json?{urllib.parse.urlencode(params)}"
-
-            req = urllib.request.Request(url)
-            req.add_header("Authorization", self.auth_header)
-            req.add_header("Content-Type", "application/json")
-
-            with urllib.request.urlopen(req) as response:
-                data = json.loads(response.read().decode())
+            logger.info(f"Fetching Zendesk tickets from list API: {url}")
+            data = self._json_get(url)
+            logger.info(f"Fetched {len(data.get('tickets', []))} raw tickets from Zendesk")
 
             tickets_data = data.get("tickets", [])
 
@@ -348,13 +395,8 @@ class ZendeskClient:
                     "subject": ticket.get("subject"),
                     "status": ticket.get("status"),
                     "priority": ticket.get("priority"),
-                    "description": ticket.get("description"),
                     "created_at": ticket.get("created_at"),
                     "updated_at": ticket.get("updated_at"),
-                    "requester_id": ticket.get("requester_id"),
-                    "assignee_id": ticket.get("assignee_id"),
-                    "organization_id": ticket.get("organization_id"),
-                    "custom_fields": self._resolve_custom_fields(ticket.get("custom_fields", [])),
                 })
 
             return {

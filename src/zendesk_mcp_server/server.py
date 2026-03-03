@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+from datetime import datetime, timezone
 from typing import Annotated, Any
 
 from cachetools.func import ttl_cache
@@ -8,6 +9,8 @@ from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field
 
+from zendesk_mcp_server.ticket_display import apply_ticket_field_displays
+from zendesk_mcp_server.ticket_field_metadata import TicketFieldOptionResolver
 from zendesk_mcp_server.zendesk_client import ZendeskClient
 
 logging.basicConfig(
@@ -55,6 +58,7 @@ Validation rules:
 - Prefer practical judgment over rigid literal matching.
 - Do not fail a title only because of capitalization differences.
 - Do not invent missing facts. If information is missing from the title, mark it invalid and explain what is missing.
+- An escalated Ticket can only marked as solved when the customer confirmed that the provided solution worked.
 
 When reviewing a title, return one line each and exactly:
 Validation: VALID or INVALID
@@ -100,19 +104,67 @@ Please fetch the ticket info, comments and knowledge base to draft a professiona
 The response should be formatted well and ready to be posted as a comment.
 """
 
+ticket_field_option_resolver = TicketFieldOptionResolver(zendesk_client)
+ticket_field_option_resolver.load()
+
+
+def _prepare_ticket_payload(ticket_id: int) -> dict[str, Any]:
+    ticket = zendesk_client.get_ticket(ticket_id)
+    ticket = apply_ticket_field_displays(ticket, ticket_field_option_resolver)
+    return ticket
+
+
+def _format_display_datetime(value: str | None) -> str:
+    if not value:
+        return "N/A"
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        dt = dt.astimezone(timezone.utc)
+        return dt.strftime("%B %-d, %Y at %H:%M UTC")
+    except ValueError:
+        return value
+
+
+def _build_ticket_summary(ticket: dict[str, Any]) -> str:
+    custom_fields = ticket.get("custom_fields", {})
+    lines = [
+        f"# Ticket #{ticket.get('id')} - {ticket.get('subject', 'Untitled')}",
+        "",
+        "| Field | Value |",
+        "| --- | --- |",
+        f"| Subject | {ticket.get('subject', 'N/A')} |",
+        f"| Status | {ticket.get('status', 'N/A')} |",
+        f"| Priority | {ticket.get('priority', 'N/A')} |",
+        f"| Created | {_format_display_datetime(ticket.get('created_at'))} |",
+        f"| Last Updated | {_format_display_datetime(ticket.get('updated_at'))} |",
+        "",
+        "## Custom Fields",
+    ]
+
+    custom_field_order = [
+        "Status With",
+        "Support Stage",
+        "Release Stage",
+        "Escalation Status",
+        "Support Class",
+        "Priority",
+    ]
+    for field_name in custom_field_order:
+        value = custom_fields.get(field_name, "N/A")
+        lines.append(f"{field_name}: {value}")
+
+    if ticket.get("escalation_status_display"):
+        lines.append(f"Escalation Status Display: {ticket['escalation_status_display']}")
+
+    return "\n".join(lines)
 
 class TicketItem(BaseModel):
     id: int | None = None
     subject: str | None = None
     status: str | None = None
     priority: str | None = None
-    description: str | None = None
     created_at: str | None = None
     updated_at: str | None = None
-    requester_id: int | None = None
-    assignee_id: int | None = None
-    organization_id: int | None = None
-    custom_fields: dict[str, Any] = Field(default_factory=dict)
 
 
 class TicketFilters(BaseModel):
@@ -180,8 +232,19 @@ def draft_ticket_response_prompt(
 def get_ticket(
     ticket_id: Annotated[int, Field(description="The ID of the ticket to retrieve")],
 ) -> str:
-    ticket = zendesk_client.get_ticket(ticket_id)
+    ticket = _prepare_ticket_payload(ticket_id)
     return json.dumps(ticket)
+
+
+@mcp.tool(
+    name="get_ticket_summary",
+    description="Retrieve a Zendesk ticket as a compact display-ready summary",
+)
+def get_ticket_summary(
+    ticket_id: Annotated[int, Field(description="The ID of the ticket to summarize")],
+) -> str:
+    ticket = _prepare_ticket_payload(ticket_id)
+    return _build_ticket_summary(ticket)
 
 
 @mcp.tool(name="create_ticket", description="Create a new Zendesk ticket")
@@ -210,7 +273,7 @@ def create_ticket(
 
 @mcp.tool(
     name="get_tickets",
-    description="Fetch the latest tickets with pagination support",
+    description="Fetch a lightweight summary list of the latest tickets with pagination support",
     structured_output=True,
 )
 def get_tickets(

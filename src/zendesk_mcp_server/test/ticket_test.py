@@ -60,7 +60,6 @@ class TestGetTicketsLastFiveHours(unittest.TestCase):
         with (
             patch("zendesk_mcp_server.zendesk_client.datetime") as mock_datetime,
             patch("zendesk_mcp_server.zendesk_client.urllib.request.urlopen", mock_urlopen),
-            patch.object(self.client, "_resolve_custom_fields", return_value={"Team": "billing"}),
         ):
             mock_datetime.now.return_value = fixed_now
 
@@ -86,13 +85,8 @@ class TestGetTicketsLastFiveHours(unittest.TestCase):
                 "subject": "New billing issue",
                 "status": "open",
                 "priority": "high",
-                "description": "Customer cannot update card",
                 "created_at": "2026-03-02T13:00:00Z",
                 "updated_at": "2026-03-02T14:45:00Z",
-                "requester_id": 2001,
-                "assignee_id": 3001,
-                "organization_id": 4001,
-                "custom_fields": {"Team": "billing"},
             },
         )
 
