@@ -81,14 +81,44 @@ Instructions:
 """
 
 TICKET_ANALYSIS_TEMPLATE = """
-You are a helpful Zendesk support analyst. You've been asked to analyze ticket #{ticket_id}.
+You are reviewing Zendesk ticket #{ticket_id} for internal support QA.
 
-Please fetch the ticket info and comments to analyze it and provide:
-1. A summary of the issue
-2. The current status and timeline
-3. Key points of interaction
+Use only the ticket details and ticket comments as evidence. Do not infer or invent facts that are not explicitly present in the ticket data. If a milestone or detail cannot be found, write "Not found".
 
-Remember to be professional and focus on actionable insights.
+Review goals:
+1. Identify whether the support handling appears compliant with internal processes based only on available evidence.
+2. Highlight any gaps, delays, missing confirmations, or unclear ownership transitions.
+3. Summarize what happened in a way that is useful for coaching and follow-up.
+
+Required output:
+1. Issue Summary
+   Briefly summarize the customer issue and what the team did.
+2. Current Status
+   State the current ticket status and the latest known state.
+3. Timeline
+   Provide the following items, each on its own line:
+   - Opened:
+   - First agent response:
+   - Escalated:
+   - Solution built:
+   - Solution delivered to customer:
+   - Customer acknowledgement:
+   Use exact timestamps when available. Otherwise write "Not found".
+4. Process Review
+   List concrete observations about process compliance or non-compliance based on evidence from the ticket and comments.
+5. Compliance Score
+   Give a score from 0 to 100.
+   - 90-100: strong evidence of compliant handling
+   - 70-89: mostly compliant with minor gaps
+   - 40-69: notable process gaps or unclear evidence
+   - 0-39: major process failures or missing critical handling steps
+   Include a short explanation for the score.
+
+Rules:
+- Do not use external assumptions or general policy knowledge unless explicitly present in the ticket.
+- Do not treat missing evidence as completed work.
+- If the customer has not explicitly confirmed the solution worked, do not mark the resolution as customer-acknowledged.
+- Prefer concise, evidence-based statements.
 """
 
 COMMENT_DRAFT_TEMPLATE = """

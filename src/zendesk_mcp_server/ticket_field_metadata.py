@@ -15,6 +15,15 @@ RELEVANT_TICKET_FIELD_ALIASES = {
     "Priority": "Priority",
 }
 
+OPTION_BACKED_TICKET_FIELDS = {
+    "Status With",
+    "Support Stage",
+    "Release Stage",
+    "Escalation",
+    "Escalation Status",
+    "Support Class",
+}
+
 
 def normalize_field_value(value: Any) -> Any:
     if not isinstance(value, str):
@@ -51,6 +60,8 @@ class TicketFieldOptionResolver:
         for field in field_definitions:
             title = field.get("title")
             if title not in RELEVANT_TICKET_FIELD_ALIASES:
+                continue
+            if title not in OPTION_BACKED_TICKET_FIELDS:
                 continue
 
             canonical_title = RELEVANT_TICKET_FIELD_ALIASES[title]
