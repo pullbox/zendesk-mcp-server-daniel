@@ -5,17 +5,7 @@ import urllib.request
 import base64
 import logging
 
-from zendesk_mcp_server.infrastructure.zendesk.tickets_repository import TicketsRepository
-from zendesk_mcp_server.infrastructure.zendesk.fields_repository import FieldsRepository
-from zendesk_mcp_server.infrastructure.zendesk.comments_repository import CommentsRepository
-from zendesk_mcp_server.infrastructure.zendesk.tickets_crud_repository import TicketsCrudRepository
-from zendesk_mcp_server.infrastructure.zendesk.comments_write_repository import CommentsWriteRepository
-from zendesk_mcp_server.infrastructure.zendesk.knowledge_base_repository import KnowledgeBaseRepository
-from zendesk_mcp_server.infrastructure.zendesk.ticket_mapper import (
-    build_ticket_list_item,
-    format_zendesk_timestamp,
-)
-from zendesk_mcp_server.infrastructure.zendesk.field_value_mapper import FieldValueMapper
+from zendesk_mcp_server.infrastructure.zendesk.service_container import build_zendesk_services
 
 logger = logging.getLogger("zendesk-mcp-client")
 _log_handlers = [logging.StreamHandler()]
@@ -57,30 +47,22 @@ class ZendeskClient:
         credentials = f"{email}/token:{token}"
         encoded_credentials = base64.b64encode(credentials.encode()).decode('ascii')
         self.auth_header = f"Basic {encoded_credentials}"
-        self.tickets_repository = TicketsRepository(
+        services = build_zendesk_services(
             base_url=self.base_url,
-            json_get=lambda url: self._json_get(url),
-            build_ticket_list_item=lambda ticket, now: build_ticket_list_item(ticket, now, self.agent_ticket_base_url),
-            timestamp_formatter=lambda value: format_zendesk_timestamp(value),
-        )
-        self.fields_repository = FieldsRepository(
-            base_url=self.base_url,
-            json_get=lambda url: self._json_get(url),
-        )
-        self.field_value_mapper = FieldValueMapper(get_ticket_fields=lambda: self.get_ticket_fields())
-        self.comments_repository = CommentsRepository(
-            base_url=self.base_url,
-            json_get=lambda url: self._json_get(url),
-        )
-        self.tickets_crud_repository = TicketsCrudRepository(
-            base_url=self.base_url,
-            json_get=lambda url: self._json_get(url),
-            resolve_custom_fields=lambda raw: self._resolve_custom_fields(raw),
+            agent_ticket_base_url=self.agent_ticket_base_url,
             zenpy_client=self.client,
             ticket_factory=ZenpyTicket,
+            json_get=lambda url: self._json_get(url),
+            get_ticket_fields=lambda: self.get_ticket_fields(),
+            resolve_custom_fields=lambda raw: self._resolve_custom_fields(raw),
         )
-        self.comments_write_repository = CommentsWriteRepository(zenpy_client=self.client)
-        self.knowledge_base_repository = KnowledgeBaseRepository(zenpy_client=self.client)
+        self.tickets_repository = services.tickets_repository
+        self.fields_repository = services.fields_repository
+        self.comments_repository = services.comments_repository
+        self.tickets_crud_repository = services.tickets_crud_repository
+        self.comments_write_repository = services.comments_write_repository
+        self.knowledge_base_repository = services.knowledge_base_repository
+        self.field_value_mapper = services.field_value_mapper
 
     def _json_get(self, url: str, timeout: int = 30) -> Dict[str, Any]:
         req = urllib.request.Request(url)
