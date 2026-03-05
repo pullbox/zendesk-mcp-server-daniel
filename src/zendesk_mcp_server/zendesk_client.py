@@ -1,4 +1,3 @@
-import datetime as dtlib
 from typing import Dict, Any, List, Optional
 import json
 import urllib.error
@@ -12,6 +11,10 @@ from zendesk_mcp_server.infrastructure.zendesk.comments_repository import Commen
 from zendesk_mcp_server.infrastructure.zendesk.tickets_crud_repository import TicketsCrudRepository
 from zendesk_mcp_server.infrastructure.zendesk.comments_write_repository import CommentsWriteRepository
 from zendesk_mcp_server.infrastructure.zendesk.knowledge_base_repository import KnowledgeBaseRepository
+from zendesk_mcp_server.infrastructure.zendesk.ticket_mapper import (
+    build_ticket_list_item,
+    format_zendesk_timestamp,
+)
 
 logger = logging.getLogger("zendesk-mcp-client")
 _log_handlers = [logging.StreamHandler()]
@@ -56,8 +59,8 @@ class ZendeskClient:
         self.tickets_repository = TicketsRepository(
             base_url=self.base_url,
             json_get=lambda url: self._json_get(url),
-            build_ticket_list_item=lambda ticket, now: self._build_ticket_list_item(ticket, now),
-            timestamp_formatter=lambda value: self._zendesk_ts(value),
+            build_ticket_list_item=lambda ticket, now: build_ticket_list_item(ticket, now, self.agent_ticket_base_url),
+            timestamp_formatter=lambda value: format_zendesk_timestamp(value),
         )
         self.fields_repository = FieldsRepository(
             base_url=self.base_url,
@@ -186,55 +189,6 @@ class ZendeskClient:
             return self.comments_write_repository.post_comment(ticket_id, comment, public)
         except Exception as e:
             raise Exception(f"Failed to post comment on ticket {ticket_id}: {str(e)}")
-
-#### New Version to strip micro seconds from the timestamp
-    def _zendesk_ts(self, dt: "datetime") -> str:
-        """
-        Format datetime for Zendesk search:
-        - no microseconds
-        - includes timezone offset (+00:00 etc.)
-        """
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        dt = dt.replace(microsecond=0)
-        return dt.isoformat()  # e.g. 2026-02-27T22:32:42+00:00
-
-    def _parse_zendesk_datetime(self, value: Optional[str]) -> Optional[dtlib.datetime]:
-        if not value:
-            return None
-
-        try:
-            return dtlib.datetime.fromisoformat(value.replace("Z", "+00:00"))
-        except ValueError:
-            logger.warning("Could not parse Zendesk timestamp: %s", value)
-            return None
-
-    def _build_ticket_list_item(self, ticket: Dict[str, Any], now: datetime) -> Dict[str, Any]:
-        updated_at = ticket.get("updated_at")
-        updated_dt = self._parse_zendesk_datetime(updated_at)
-        ticket_id = ticket.get("id")
-        ticket_url = f"{self.agent_ticket_base_url}/{ticket_id}" if ticket_id is not None else None
-        stale_age_hours = None
-        stale_age_days = None
-
-        if updated_dt is not None:
-            age_seconds = max((now - updated_dt).total_seconds(), 0)
-            stale_age_hours = int(age_seconds // 3600)
-            stale_age_days = int(age_seconds // 86400)
-
-        return {
-            "id": ticket_id,
-            "ticket_url": ticket_url,
-            "ticket_link": f"[{ticket_id}]({ticket_url})" if ticket_url is not None else None,
-            "subject": ticket.get("subject"),
-            "status": ticket.get("status"),
-            "priority": ticket.get("priority"),
-            "created_at": ticket.get("created_at"),
-            "updated_at": updated_at,
-            "stale_age_hours": stale_age_hours,
-            "stale_age_days": stale_age_days,
-        }
-
 
     def get_tickets(
         self,
