@@ -7,6 +7,8 @@ import base64
 import logging
 
 from zendesk_mcp_server.infrastructure.zendesk.tickets_repository import TicketsRepository
+from zendesk_mcp_server.infrastructure.zendesk.fields_repository import FieldsRepository
+from zendesk_mcp_server.infrastructure.zendesk.comments_repository import CommentsRepository
 
 logger = logging.getLogger("zendesk-mcp-client")
 _log_handlers = [logging.StreamHandler()]
@@ -55,6 +57,14 @@ class ZendeskClient:
             build_ticket_list_item=lambda ticket, now: self._build_ticket_list_item(ticket, now),
             timestamp_formatter=lambda value: self._zendesk_ts(value),
         )
+        self.fields_repository = FieldsRepository(
+            base_url=self.base_url,
+            json_get=lambda url: self._json_get(url),
+        )
+        self.comments_repository = CommentsRepository(
+            base_url=self.base_url,
+            json_get=lambda url: self._json_get(url),
+        )
 
     def _json_get(self, url: str, timeout: int = 30) -> Dict[str, Any]:
         req = urllib.request.Request(url)
@@ -69,19 +79,7 @@ class ZendeskClient:
         Useful for discovering custom field IDs and names.
         """
         try:
-            url = f"{self.base_url}/ticket_fields.json"
-            logger.info("Fetching Zendesk ticket fields")
-            data = self._json_get(url)
-            logger.info("Fetched Zendesk ticket fields successfully")
-            return [
-                {
-                    "id": f.get("id"),
-                    "title": f.get("title"),
-                    "type": f.get("type"),
-                    "active": f.get("active"),
-                }
-                for f in data.get("ticket_fields", [])
-            ]
+            return self.fields_repository.get_ticket_fields()
         except Exception as e:
             logger.error(f"Failed to get Zendesk ticket fields: {e}")
             raise Exception(f"Failed to get ticket fields: {str(e)}")
@@ -91,11 +89,7 @@ class ZendeskClient:
         Fetch full ticket field definitions so option metadata can be resolved dynamically.
         """
         try:
-            url = f"{self.base_url}/ticket_fields.json"
-            logger.info("Fetching Zendesk ticket field definitions")
-            data = self._json_get(url)
-            logger.info("Fetched Zendesk ticket field definitions successfully")
-            return data.get("ticket_fields", [])
+            return self.fields_repository.get_ticket_field_definitions()
         except Exception as e:
             logger.error(f"Failed to get Zendesk ticket field definitions: {e}")
             raise Exception(f"Failed to get ticket field definitions: {str(e)}")
@@ -105,11 +99,7 @@ class ZendeskClient:
         Fetch selectable options for a specific ticket field.
         """
         try:
-            url = f"{self.base_url}/ticket_fields/{ticket_field_id}/options.json"
-            logger.info(f"Fetching Zendesk ticket field options for field {ticket_field_id}")
-            data = self._json_get(url)
-            logger.info(f"Fetched Zendesk ticket field options for field {ticket_field_id} successfully")
-            return data.get("custom_field_options", [])
+            return self.fields_repository.get_ticket_field_options(ticket_field_id)
         except Exception as e:
             logger.error(f"Failed to get Zendesk ticket field options for field {ticket_field_id}: {e}")
             raise Exception(f"Failed to get ticket field options for field {ticket_field_id}: {str(e)}")
@@ -184,37 +174,7 @@ class ZendeskClient:
         Get all comments for a specific ticket.
         """
         try:
-            logger.info(f"Fetching Zendesk comments for ticket {ticket_id}")
-            comments: List[Dict[str, Any]] = []
-            url = f"{self.base_url}/tickets/{ticket_id}/comments.json"
-
-            while url:
-                data = self._json_get(url)
-                for comment in data.get("comments", []):
-                    attachments = []
-                    for attachment in comment.get("attachments", []) or []:
-                        attachments.append(
-                            {
-                                "id": attachment.get("id"),
-                                "file_name": attachment.get("file_name"),
-                                "content_type": attachment.get("content_type"),
-                                "size": attachment.get("size"),
-                                "inline": attachment.get("inline"),
-                            }
-                        )
-                    comments.append({
-                        'id': comment.get('id'),
-                        'author_id': comment.get('author_id'),
-                        'body': comment.get('body'),
-                        'html_body': comment.get('html_body'),
-                        'public': comment.get('public'),
-                        'created_at': comment.get('created_at'),
-                        'attachments': attachments,
-                    })
-                url = data.get("next_page")
-
-            logger.info(f"Fetched {len(comments)} Zendesk comments for ticket {ticket_id}")
-            return comments
+            return self.comments_repository.get_ticket_comments(ticket_id)
         except urllib.error.HTTPError as e:
             error_body = e.read().decode() if e.fp else "No response body"
             logger.error(f"Failed to fetch comments for ticket {ticket_id}: HTTP {e.code} - {e.reason}. {error_body}")
