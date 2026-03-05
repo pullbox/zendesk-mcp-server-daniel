@@ -1951,3 +1951,84 @@
 2026-03-05 17:04:22,314 - INFO - Fetching Zendesk ticket field options for field 11068759378973
 2026-03-05 17:04:22,521 - INFO - Fetched Zendesk ticket field options for field 11068759378973 successfully
 2026-03-05 17:04:22,521 - INFO - Loaded ticket field option maps for 4 relevant fields
+2026-03-05 17:07:39,643 - INFO - Fetching Zendesk comments for ticket 777
+2026-03-05 17:07:39,644 - INFO - Fetched 1 Zendesk comments for ticket 777
+2026-03-05 17:07:39,644 - INFO - Fetching Zendesk ticket 777
+2026-03-05 17:07:39,644 - INFO - Fetched Zendesk ticket 777 successfully
+2026-03-05 17:07:39,649 - INFO - Fetching solved-ticket search page 1: https://example.zendesk.com/api/v2/search.json?query=type%3Aticket+status%3Asolved+solved%3E%3D2026-02-01+solved%3C2026-03-01+assignee%3A%22pedro%22&page=1&per_page=100&sort_by=created_at&sort_order=desc
+2026-03-05 17:07:39,650 - INFO - Fetching solved-ticket search page 1: https://example.zendesk.com/api/v2/search.json?query=type%3Aticket+status%3Asolved+solved%3E%3D2026-02-01+solved%3C2026-03-01+assignee%3A%22pedro%22&page=1&per_page=100&sort_by=created_at&sort_order=desc
+2026-03-05 17:07:39,651 - INFO - Searching tickets by text via search API: https://example.zendesk.com/api/v2/search.json?query=type%3Aticket+%22Facephi%22+organization%3A%22Acme%22+updated%3E2026-03-01+updated%3C2026-03-04+status%3Aopen+-tags%3Ainternal+commenter%3A%22Tom%22&page=2&per_page=25&sort_by=updated_at&sort_order=desc
+2026-03-05 17:07:39,652 - INFO - Searching tickets by text via search API: https://example.zendesk.com/api/v2/search.json?query=type%3Aticket+%22Facephi%22&page=1&per_page=25&sort_by=updated_at&sort_order=desc
+2026-03-05 17:07:39,653 - INFO - Searching tickets by text via search API: https://example.zendesk.com/api/v2/search.json?query=type%3Aticket+%22Facephi%22+status%3Csolved&page=1&per_page=25&sort_by=updated_at&sort_order=desc
+2026-03-05 17:07:39,655 - INFO - zendesk mcp server started
+2026-03-05 17:07:39,657 - INFO - Fetching Zendesk ticket field definitions
+2026-03-05 17:07:40,331 - INFO - Fetched Zendesk ticket field definitions successfully
+2026-03-05 17:07:40,331 - INFO - Fetching Zendesk ticket field options for field 25497966
+2026-03-05 17:07:40,878 - INFO - Fetched Zendesk ticket field options for field 25497966 successfully
+2026-03-05 17:07:40,878 - INFO - Fetching Zendesk ticket field options for field 360038406752
+2026-03-05 17:07:41,414 - INFO - Fetched Zendesk ticket field options for field 360038406752 successfully
+2026-03-05 17:07:41,414 - INFO - Fetching Zendesk ticket field options for field 4415622115985
+2026-03-05 17:07:41,918 - INFO - Fetched Zendesk ticket field options for field 4415622115985 successfully
+2026-03-05 17:07:41,919 - INFO - Fetching Zendesk ticket field options for field 11068759378973
+2026-03-05 17:07:42,160 - INFO - Fetched Zendesk ticket field options for field 11068759378973 successfully
+2026-03-05 17:07:42,160 - INFO - Loaded ticket field option maps for 4 relevant fields
+2026-03-05 17:08:10,453 - INFO - Fetching Zendesk comments for ticket 777
+2026-03-05 17:08:10,453 - INFO - Fetched 1 Zendesk comments for ticket 777
+2026-03-05 17:08:10,453 - INFO - Fetching Zendesk ticket 777
+2026-03-05 17:08:10,453 - INFO - Fetched Zendesk ticket 777 successfully
+2026-03-05 17:08:10,455 - INFO - Fetching Zendesk tickets from search API: https://example.zendesk.com/api/v2/search.json?query=type%3Aticket+created%3E2026-03-05T18%3A08%3A10%2B00%3A00&page=1&per_page=25&sort_by=created_at&sort_order=desc
+2026-03-05 17:08:10,455 - INFO - Zendesk search query: type:ticket created>2026-03-05T18:08:10+00:00
+2026-03-05 17:08:10,455 - INFO - Fetched 1 raw search results from Zendesk
+2026-03-05 17:08:10,457 - INFO - Fetching Zendesk tickets from search API: https://example.zendesk.com/api/v2/search.json?query=type%3Aticket+updated%3E2026-03-05T17%3A08%3A10%2B00%3A00&page=1&per_page=25&sort_by=created_at&sort_order=desc
+2026-03-05 17:08:10,457 - INFO - Zendesk search query: type:ticket updated>2026-03-05T17:08:10+00:00
+2026-03-05 17:08:10,457 - INFO - Fetched 2 raw search results from Zendesk
+2026-03-05 17:08:10,458 - INFO - Fetching Zendesk tickets from search API: https://example.zendesk.com/api/v2/search.json?query=type%3Aticket+status%3Csolved+-tags%3Ainternal+updated%3C2026-02-28T22%3A08%3A10%2B00%3A00&page=1&per_page=25&sort_by=created_at&sort_order=desc
+2026-03-05 17:08:10,458 - INFO - Zendesk search query: type:ticket status<solved -tags:internal updated<2026-02-28T22:08:10+00:00
+2026-03-05 17:08:10,458 - INFO - Fetched 1 raw search results from Zendesk
+2026-03-05 17:08:10,459 - INFO - Fetching solved-ticket search page 1: https://example.zendesk.com/api/v2/search.json?query=type%3Aticket+status%3Asolved+solved%3E%3D2026-02-01+solved%3C2026-03-01+assignee%3A%22pedro%22&page=1&per_page=100&sort_by=created_at&sort_order=desc
+2026-03-05 17:08:10,460 - INFO - Fetching solved-ticket search page 1: https://example.zendesk.com/api/v2/search.json?query=type%3Aticket+status%3Asolved+solved%3E%3D2026-02-01+solved%3C2026-03-01+assignee%3A%22pedro%22&page=1&per_page=100&sort_by=created_at&sort_order=desc
+2026-03-05 17:08:10,460 - INFO - Searching tickets by text via search API: https://example.zendesk.com/api/v2/search.json?query=type%3Aticket+%22Facephi%22+organization%3A%22Acme%22+updated%3E2026-03-01+updated%3C2026-03-04+status%3Aopen+-tags%3Ainternal+commenter%3A%22Tom%22&page=2&per_page=25&sort_by=updated_at&sort_order=desc
+2026-03-05 17:08:10,461 - INFO - Searching tickets by text via search API: https://example.zendesk.com/api/v2/search.json?query=type%3Aticket+%22Facephi%22&page=1&per_page=25&sort_by=updated_at&sort_order=desc
+2026-03-05 17:08:10,462 - INFO - Searching tickets by text via search API: https://example.zendesk.com/api/v2/search.json?query=type%3Aticket+%22Facephi%22+status%3Csolved&page=1&per_page=25&sort_by=updated_at&sort_order=desc
+2026-03-05 17:08:10,464 - INFO - zendesk mcp server started
+2026-03-05 17:08:10,466 - INFO - Fetching Zendesk ticket field definitions
+2026-03-05 17:08:11,593 - INFO - Fetched Zendesk ticket field definitions successfully
+2026-03-05 17:08:11,594 - INFO - Fetching Zendesk ticket field options for field 25497966
+2026-03-05 17:08:11,809 - INFO - Fetched Zendesk ticket field options for field 25497966 successfully
+2026-03-05 17:08:11,809 - INFO - Fetching Zendesk ticket field options for field 360038406752
+2026-03-05 17:08:12,367 - INFO - Fetched Zendesk ticket field options for field 360038406752 successfully
+2026-03-05 17:08:12,368 - INFO - Fetching Zendesk ticket field options for field 4415622115985
+2026-03-05 17:08:12,589 - INFO - Fetched Zendesk ticket field options for field 4415622115985 successfully
+2026-03-05 17:08:12,589 - INFO - Fetching Zendesk ticket field options for field 11068759378973
+2026-03-05 17:08:13,107 - INFO - Fetched Zendesk ticket field options for field 11068759378973 successfully
+2026-03-05 17:08:13,107 - INFO - Loaded ticket field option maps for 4 relevant fields
+2026-03-05 17:08:45,786 - INFO - Fetching Zendesk comments for ticket 777
+2026-03-05 17:08:45,786 - INFO - Fetched 1 Zendesk comments for ticket 777
+2026-03-05 17:08:45,787 - INFO - Fetching Zendesk ticket 777
+2026-03-05 17:08:45,787 - INFO - Fetched Zendesk ticket 777 successfully
+2026-03-05 17:08:45,788 - INFO - Fetching Zendesk tickets from search API: https://example.zendesk.com/api/v2/search.json?query=type%3Aticket+created%3E2026-03-02T11%3A30%3A00%2B00%3A00&page=1&per_page=25&sort_by=created_at&sort_order=desc
+2026-03-05 17:08:45,788 - INFO - Zendesk search query: type:ticket created>2026-03-02T11:30:00+00:00
+2026-03-05 17:08:45,788 - INFO - Fetched 1 raw search results from Zendesk
+2026-03-05 17:08:45,789 - INFO - Fetching Zendesk tickets from search API: https://example.zendesk.com/api/v2/search.json?query=type%3Aticket+updated%3E2026-03-02T10%3A30%3A00%2B00%3A00&page=1&per_page=25&sort_by=created_at&sort_order=desc
+2026-03-05 17:08:45,789 - INFO - Zendesk search query: type:ticket updated>2026-03-02T10:30:00+00:00
+2026-03-05 17:08:45,789 - INFO - Fetched 2 raw search results from Zendesk
+2026-03-05 17:08:45,790 - INFO - Fetching Zendesk tickets from search API: https://example.zendesk.com/api/v2/search.json?query=type%3Aticket+status%3Csolved+-tags%3Ainternal+updated%3C2026-02-25T15%3A30%3A00%2B00%3A00&page=1&per_page=25&sort_by=created_at&sort_order=desc
+2026-03-05 17:08:45,790 - INFO - Zendesk search query: type:ticket status<solved -tags:internal updated<2026-02-25T15:30:00+00:00
+2026-03-05 17:08:45,790 - INFO - Fetched 1 raw search results from Zendesk
+2026-03-05 17:08:45,791 - INFO - Fetching solved-ticket search page 1: https://example.zendesk.com/api/v2/search.json?query=type%3Aticket+status%3Asolved+solved%3E%3D2026-02-01+solved%3C2026-03-01+assignee%3A%22pedro%22&page=1&per_page=100&sort_by=created_at&sort_order=desc
+2026-03-05 17:08:45,792 - INFO - Fetching solved-ticket search page 1: https://example.zendesk.com/api/v2/search.json?query=type%3Aticket+status%3Asolved+solved%3E%3D2026-02-01+solved%3C2026-03-01+assignee%3A%22pedro%22&page=1&per_page=100&sort_by=created_at&sort_order=desc
+2026-03-05 17:08:45,793 - INFO - Searching tickets by text via search API: https://example.zendesk.com/api/v2/search.json?query=type%3Aticket+%22Facephi%22+organization%3A%22Acme%22+updated%3E2026-03-01+updated%3C2026-03-04+status%3Aopen+-tags%3Ainternal+commenter%3A%22Tom%22&page=2&per_page=25&sort_by=updated_at&sort_order=desc
+2026-03-05 17:08:45,794 - INFO - Searching tickets by text via search API: https://example.zendesk.com/api/v2/search.json?query=type%3Aticket+%22Facephi%22&page=1&per_page=25&sort_by=updated_at&sort_order=desc
+2026-03-05 17:08:45,795 - INFO - Searching tickets by text via search API: https://example.zendesk.com/api/v2/search.json?query=type%3Aticket+%22Facephi%22+status%3Csolved&page=1&per_page=25&sort_by=updated_at&sort_order=desc
+2026-03-05 17:08:45,797 - INFO - zendesk mcp server started
+2026-03-05 17:08:45,799 - INFO - Fetching Zendesk ticket field definitions
+2026-03-05 17:08:46,188 - INFO - Fetched Zendesk ticket field definitions successfully
+2026-03-05 17:08:46,188 - INFO - Fetching Zendesk ticket field options for field 25497966
+2026-03-05 17:08:46,414 - INFO - Fetched Zendesk ticket field options for field 25497966 successfully
+2026-03-05 17:08:46,414 - INFO - Fetching Zendesk ticket field options for field 360038406752
+2026-03-05 17:08:46,924 - INFO - Fetched Zendesk ticket field options for field 360038406752 successfully
+2026-03-05 17:08:46,924 - INFO - Fetching Zendesk ticket field options for field 4415622115985
+2026-03-05 17:08:47,140 - INFO - Fetched Zendesk ticket field options for field 4415622115985 successfully
+2026-03-05 17:08:47,140 - INFO - Fetching Zendesk ticket field options for field 11068759378973
+2026-03-05 17:08:47,698 - INFO - Fetched Zendesk ticket field options for field 11068759378973 successfully
+2026-03-05 17:08:47,698 - INFO - Loaded ticket field option maps for 4 relevant fields
