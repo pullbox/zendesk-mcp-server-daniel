@@ -9,6 +9,9 @@ import logging
 from zendesk_mcp_server.infrastructure.zendesk.tickets_repository import TicketsRepository
 from zendesk_mcp_server.infrastructure.zendesk.fields_repository import FieldsRepository
 from zendesk_mcp_server.infrastructure.zendesk.comments_repository import CommentsRepository
+from zendesk_mcp_server.infrastructure.zendesk.tickets_crud_repository import TicketsCrudRepository
+from zendesk_mcp_server.infrastructure.zendesk.comments_write_repository import CommentsWriteRepository
+from zendesk_mcp_server.infrastructure.zendesk.knowledge_base_repository import KnowledgeBaseRepository
 
 logger = logging.getLogger("zendesk-mcp-client")
 _log_handlers = [logging.StreamHandler()]
@@ -25,7 +28,6 @@ logging.basicConfig(
 )
 
 from zenpy import Zenpy
-from zenpy.lib.api_objects import Comment
 from zenpy.lib.api_objects import Ticket as ZenpyTicket
 from datetime import datetime, timezone
 
@@ -65,6 +67,15 @@ class ZendeskClient:
             base_url=self.base_url,
             json_get=lambda url: self._json_get(url),
         )
+        self.tickets_crud_repository = TicketsCrudRepository(
+            base_url=self.base_url,
+            json_get=lambda url: self._json_get(url),
+            resolve_custom_fields=lambda raw: self._resolve_custom_fields(raw),
+            zenpy_client=self.client,
+            ticket_factory=ZenpyTicket,
+        )
+        self.comments_write_repository = CommentsWriteRepository(zenpy_client=self.client)
+        self.knowledge_base_repository = KnowledgeBaseRepository(zenpy_client=self.client)
 
     def _json_get(self, url: str, timeout: int = 30) -> Dict[str, Any]:
         req = urllib.request.Request(url)
@@ -138,26 +149,7 @@ class ZendeskClient:
         Query a ticket by its ID, including resolved custom field values.
         """
         try:
-            logger.info(f"Fetching Zendesk ticket {ticket_id}")
-            data = self._json_get(f"{self.base_url}/tickets/{ticket_id}.json")
-            ticket = data.get("ticket", {})
-            custom_fields = self._resolve_custom_fields(ticket.get("custom_fields", []))
-            result = {
-                'id': ticket.get('id'),
-                'subject': ticket.get('subject'),
-                'description': ticket.get('description'),
-                'status': ticket.get('status'),
-                'priority': ticket.get('priority'),
-                'created_at': ticket.get('created_at'),
-                'updated_at': ticket.get('updated_at'),
-                'requester_id': ticket.get('requester_id'),
-                'assignee_id': ticket.get('assignee_id'),
-                'organization_id': ticket.get('organization_id'),
-                'tags': ticket.get('tags', []),
-                'custom_fields': custom_fields,
-            }
-            logger.info(f"Fetched Zendesk ticket {ticket_id} successfully")
-            return result
+            return self.tickets_crud_repository.get_ticket(ticket_id)
         except urllib.error.HTTPError as e:
             error_body = e.read().decode() if e.fp else "No response body"
             logger.error(f"Failed to fetch Zendesk ticket {ticket_id}: HTTP {e.code} - {e.reason}. {error_body}")
@@ -191,13 +183,7 @@ class ZendeskClient:
         Post a comment to an existing ticket.
         """
         try:
-            ticket = self.client.tickets(id=ticket_id)
-            ticket.comment = Comment(
-                html_body=comment,
-                public=public
-            )
-            self.client.tickets.update(ticket)
-            return comment
+            return self.comments_write_repository.post_comment(ticket_id, comment, public)
         except Exception as e:
             raise Exception(f"Failed to post comment on ticket {ticket_id}: {str(e)}")
 
@@ -394,26 +380,7 @@ class ZendeskClient:
         Returns a Dict of section -> [article].
         """
         try:
-            # Get all sections
-            sections = self.client.help_center.sections()
-
-            # Get articles for each section
-            kb = {}
-            for section in sections:
-                articles = self.client.help_center.sections.articles(section.id)
-                kb[section.name] = {
-                    'section_id': section.id,
-                    'description': section.description,
-                    'articles': [{
-                        'id': article.id,
-                        'title': article.title,
-                        'body': article.body,
-                        'updated_at': str(article.updated_at),
-                        'url': article.html_url
-                    } for article in articles]
-                }
-
-            return kb
+            return self.knowledge_base_repository.get_all_articles()
         except Exception as e:
             raise Exception(f"Failed to fetch knowledge base: {str(e)}")
 
@@ -442,7 +409,7 @@ class ZendeskClient:
             custom_fields: Optional list of dicts: {id: int, value: Any}
         """
         try:
-            ticket = ZenpyTicket(
+            return self.tickets_crud_repository.create_ticket(
                 subject=subject,
                 description=description,
                 requester_id=requester_id,
@@ -452,30 +419,6 @@ class ZendeskClient:
                 tags=tags,
                 custom_fields=custom_fields,
             )
-            created_audit = self.client.tickets.create(ticket)
-            # Fetch created ticket id from audit
-            created_ticket_id = getattr(getattr(created_audit, 'ticket', None), 'id', None)
-            if created_ticket_id is None:
-                # Fallback: try to read id from audit events
-                created_ticket_id = getattr(created_audit, 'id', None)
-
-            # Fetch full ticket to return consistent data
-            created = self.client.tickets(id=created_ticket_id) if created_ticket_id else None
-
-            return {
-                'id': getattr(created, 'id', created_ticket_id),
-                'subject': getattr(created, 'subject', subject),
-                'description': getattr(created, 'description', description),
-                'status': getattr(created, 'status', 'new'),
-                'priority': getattr(created, 'priority', priority),
-                'type': getattr(created, 'type', type),
-                'created_at': str(getattr(created, 'created_at', '')),
-                'updated_at': str(getattr(created, 'updated_at', '')),
-                'requester_id': getattr(created, 'requester_id', requester_id),
-                'assignee_id': getattr(created, 'assignee_id', assignee_id),
-                'organization_id': getattr(created, 'organization_id', None),
-                'tags': list(getattr(created, 'tags', tags or []) or []),
-            }
         except Exception as e:
             raise Exception(f"Failed to create ticket: {str(e)}")
 
@@ -488,32 +431,6 @@ class ZendeskClient:
         tags (list[str]), custom_fields (list[dict]), due_at, etc.
         """
         try:
-            # Load the ticket, mutate fields directly, and update
-            ticket = self.client.tickets(id=ticket_id)
-            for key, value in fields.items():
-                if value is None:
-                    continue
-                setattr(ticket, key, value)
-
-            # This call returns a TicketAudit (not a Ticket). Don't read attrs from it.
-            self.client.tickets.update(ticket)
-
-            # Fetch the fresh ticket to return consistent data
-            refreshed = self.client.tickets(id=ticket_id)
-
-            return {
-                'id': refreshed.id,
-                'subject': refreshed.subject,
-                'description': refreshed.description,
-                'status': refreshed.status,
-                'priority': refreshed.priority,
-                'type': getattr(refreshed, 'type', None),
-                'created_at': str(refreshed.created_at),
-                'updated_at': str(refreshed.updated_at),
-                'requester_id': refreshed.requester_id,
-                'assignee_id': refreshed.assignee_id,
-                'organization_id': refreshed.organization_id,
-                'tags': list(getattr(refreshed, 'tags', []) or []),
-            }
+            return self.tickets_crud_repository.update_ticket(ticket_id, fields)
         except Exception as e:
             raise Exception(f"Failed to update ticket {ticket_id}: {str(e)}")
