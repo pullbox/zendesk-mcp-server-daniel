@@ -735,3 +735,434 @@
 2026-03-05 14:21:37,670 - INFO - Processing request of type ListToolsRequest
 2026-03-05 14:21:37,672 - INFO - Processing request of type ListPromptsRequest
 2026-03-05 14:21:37,673 - INFO - Processing request of type ListResourcesRequest
+2026-03-05 14:24:58,207 - INFO - Processing request of type CallToolRequest
+2026-03-05 14:24:58,213 - INFO - Fetching Zendesk tickets from search API: https://appdome.zendesk.com/api/v2/search.json?query=type%3Aticket+-tags%3Ainternal+created%3E2026-03-04T19%3A24%3A58%2B00%3A00&page=1&per_page=100&sort_by=created_at&sort_order=desc
+2026-03-05 14:24:58,214 - INFO - Zendesk search query: type:ticket -tags:internal created>2026-03-04T19:24:58+00:00
+2026-03-05 14:24:59,003 - INFO - Fetched 50 raw search results from Zendesk
+2026-03-05 14:24:59,004 - INFO - Fetching Zendesk ticket 42541
+2026-03-05 14:24:59,528 - INFO - Fetching Zendesk ticket fields
+2026-03-05 14:24:59,869 - INFO - Fetched Zendesk ticket fields successfully
+2026-03-05 14:24:59,869 - INFO - Fetched Zendesk ticket 42541 successfully
+2026-03-05 14:24:59,870 - INFO - Fetching Zendesk comments for ticket 42541
+2026-03-05 14:25:00,437 - INFO - Fetched 1 Zendesk comments for ticket 42541
+2026-03-05 14:25:00,438 - INFO - Fetching Zendesk ticket 42540
+2026-03-05 14:25:00,994 - INFO - Fetched Zendesk ticket 42540 successfully
+2026-03-05 14:25:00,994 - INFO - Fetching Zendesk comments for ticket 42540
+2026-03-05 14:25:01,283 - INFO - Fetched 1 Zendesk comments for ticket 42540
+2026-03-05 14:25:01,284 - INFO - Fetching Zendesk ticket 42539
+2026-03-05 14:25:01,881 - INFO - Fetched Zendesk ticket 42539 successfully
+2026-03-05 14:25:01,882 - INFO - Fetching Zendesk comments for ticket 42539
+2026-03-05 14:25:02,193 - INFO - Fetched 2 Zendesk comments for ticket 42539
+2026-03-05 14:25:02,193 - INFO - Fetching Zendesk ticket 42538
+2026-03-05 14:25:02,437 - INFO - Fetched Zendesk ticket 42538 successfully
+2026-03-05 14:25:02,437 - INFO - Fetching Zendesk comments for ticket 42538
+2026-03-05 14:25:02,980 - INFO - Fetched 1 Zendesk comments for ticket 42538
+2026-03-05 14:25:02,980 - INFO - Fetching Zendesk ticket 42537
+2026-03-05 14:25:03,229 - INFO - Fetched Zendesk ticket 42537 successfully
+2026-03-05 14:25:03,230 - INFO - Fetching Zendesk comments for ticket 42537
+2026-03-05 14:25:03,471 - INFO - Fetched 1 Zendesk comments for ticket 42537
+2026-03-05 14:25:03,472 - INFO - Fetching Zendesk ticket 42536
+2026-03-05 14:25:03,981 - INFO - Fetched Zendesk ticket 42536 successfully
+2026-03-05 14:25:03,981 - INFO - Fetching Zendesk comments for ticket 42536
+2026-03-05 14:25:04,275 - INFO - Fetched 2 Zendesk comments for ticket 42536
+2026-03-05 14:25:04,276 - INFO - Fetching Zendesk ticket 42535
+2026-03-05 14:25:04,533 - INFO - Fetched Zendesk ticket 42535 successfully
+2026-03-05 14:25:04,533 - INFO - Fetching Zendesk comments for ticket 42535
+2026-03-05 14:25:04,824 - INFO - Fetched 2 Zendesk comments for ticket 42535
+2026-03-05 14:25:04,825 - INFO - Fetching Zendesk ticket 42534
+2026-03-05 14:25:05,057 - INFO - Fetched Zendesk ticket 42534 successfully
+2026-03-05 14:25:05,057 - INFO - Fetching Zendesk comments for ticket 42534
+2026-03-05 14:25:05,330 - INFO - Fetched 2 Zendesk comments for ticket 42534
+2026-03-05 14:25:05,330 - INFO - Fetching Zendesk ticket 42533
+2026-03-05 14:25:05,575 - INFO - Fetched Zendesk ticket 42533 successfully
+2026-03-05 14:25:05,575 - INFO - Fetching Zendesk comments for ticket 42533
+2026-03-05 14:25:05,847 - INFO - Fetched 2 Zendesk comments for ticket 42533
+2026-03-05 14:25:05,849 - INFO - Fetching Zendesk ticket 42532
+2026-03-05 14:25:06,090 - INFO - Fetched Zendesk ticket 42532 successfully
+2026-03-05 14:25:06,091 - INFO - Fetching Zendesk comments for ticket 42532
+2026-03-05 14:25:06,403 - INFO - Fetched 2 Zendesk comments for ticket 42532
+2026-03-05 14:25:06,404 - INFO - Fetching Zendesk ticket 42531
+2026-03-05 14:25:06,915 - INFO - Fetched Zendesk ticket 42531 successfully
+2026-03-05 14:25:06,915 - INFO - Fetching Zendesk comments for ticket 42531
+2026-03-05 14:25:07,193 - INFO - Fetched 2 Zendesk comments for ticket 42531
+2026-03-05 14:25:07,194 - INFO - Fetching Zendesk ticket 42530
+2026-03-05 14:25:07,448 - INFO - Fetched Zendesk ticket 42530 successfully
+2026-03-05 14:25:07,449 - INFO - Fetching Zendesk comments for ticket 42530
+2026-03-05 14:25:07,705 - INFO - Fetched 2 Zendesk comments for ticket 42530
+2026-03-05 14:25:07,705 - INFO - Fetching Zendesk ticket 42529
+2026-03-05 14:25:07,947 - INFO - Fetched Zendesk ticket 42529 successfully
+2026-03-05 14:25:07,948 - INFO - Fetching Zendesk comments for ticket 42529
+2026-03-05 14:25:08,208 - INFO - Fetched 2 Zendesk comments for ticket 42529
+2026-03-05 14:25:08,208 - INFO - Fetching Zendesk ticket 42528
+2026-03-05 14:25:08,460 - INFO - Fetched Zendesk ticket 42528 successfully
+2026-03-05 14:25:08,460 - INFO - Fetching Zendesk comments for ticket 42528
+2026-03-05 14:25:08,711 - INFO - Fetched 2 Zendesk comments for ticket 42528
+2026-03-05 14:25:08,711 - INFO - Fetching Zendesk ticket 42527
+2026-03-05 14:25:08,963 - INFO - Fetched Zendesk ticket 42527 successfully
+2026-03-05 14:25:08,963 - INFO - Fetching Zendesk comments for ticket 42527
+2026-03-05 14:25:09,246 - INFO - Fetched 2 Zendesk comments for ticket 42527
+2026-03-05 14:25:09,247 - INFO - Fetching Zendesk ticket 42526
+2026-03-05 14:25:09,512 - INFO - Fetched Zendesk ticket 42526 successfully
+2026-03-05 14:25:09,513 - INFO - Fetching Zendesk comments for ticket 42526
+2026-03-05 14:25:09,835 - INFO - Fetched 6 Zendesk comments for ticket 42526
+2026-03-05 14:25:09,835 - INFO - Fetching Zendesk ticket 42525
+2026-03-05 14:25:10,148 - INFO - Fetched Zendesk ticket 42525 successfully
+2026-03-05 14:25:10,148 - INFO - Fetching Zendesk comments for ticket 42525
+2026-03-05 14:25:10,404 - INFO - Fetched 1 Zendesk comments for ticket 42525
+2026-03-05 14:25:10,405 - INFO - Fetching Zendesk ticket 42524
+2026-03-05 14:25:10,661 - INFO - Fetched Zendesk ticket 42524 successfully
+2026-03-05 14:25:10,661 - INFO - Fetching Zendesk comments for ticket 42524
+2026-03-05 14:25:10,982 - INFO - Fetched 5 Zendesk comments for ticket 42524
+2026-03-05 14:25:10,983 - INFO - Fetching Zendesk ticket 42523
+2026-03-05 14:25:11,267 - INFO - Fetched Zendesk ticket 42523 successfully
+2026-03-05 14:25:11,267 - INFO - Fetching Zendesk comments for ticket 42523
+2026-03-05 14:25:11,531 - INFO - Fetched 4 Zendesk comments for ticket 42523
+2026-03-05 14:25:11,532 - INFO - Fetching Zendesk ticket 42522
+2026-03-05 14:25:11,793 - INFO - Fetched Zendesk ticket 42522 successfully
+2026-03-05 14:25:11,793 - INFO - Fetching Zendesk comments for ticket 42522
+2026-03-05 14:25:12,119 - INFO - Fetched 4 Zendesk comments for ticket 42522
+2026-03-05 14:25:12,120 - INFO - Fetching Zendesk ticket 42518
+2026-03-05 14:25:12,363 - INFO - Fetched Zendesk ticket 42518 successfully
+2026-03-05 14:25:12,363 - INFO - Fetching Zendesk comments for ticket 42518
+2026-03-05 14:25:12,630 - INFO - Fetched 5 Zendesk comments for ticket 42518
+2026-03-05 14:25:12,631 - INFO - Fetching Zendesk ticket 42517
+2026-03-05 14:25:13,130 - INFO - Fetched Zendesk ticket 42517 successfully
+2026-03-05 14:25:13,131 - INFO - Fetching Zendesk comments for ticket 42517
+2026-03-05 14:25:13,415 - INFO - Fetched 2 Zendesk comments for ticket 42517
+2026-03-05 14:25:13,416 - INFO - Fetching Zendesk ticket 42516
+2026-03-05 14:25:13,691 - INFO - Fetched Zendesk ticket 42516 successfully
+2026-03-05 14:25:13,692 - INFO - Fetching Zendesk comments for ticket 42516
+2026-03-05 14:25:13,979 - INFO - Fetched 4 Zendesk comments for ticket 42516
+2026-03-05 14:25:13,981 - INFO - Fetching Zendesk ticket 42515
+2026-03-05 14:25:14,344 - INFO - Fetched Zendesk ticket 42515 successfully
+2026-03-05 14:25:14,345 - INFO - Fetching Zendesk comments for ticket 42515
+2026-03-05 14:25:14,704 - INFO - Fetched 6 Zendesk comments for ticket 42515
+2026-03-05 14:25:14,705 - INFO - Fetching Zendesk ticket 42514
+2026-03-05 14:25:14,953 - INFO - Fetched Zendesk ticket 42514 successfully
+2026-03-05 14:25:14,953 - INFO - Fetching Zendesk comments for ticket 42514
+2026-03-05 14:25:15,214 - INFO - Fetched 3 Zendesk comments for ticket 42514
+2026-03-05 14:25:15,214 - INFO - Fetching Zendesk ticket 42513
+2026-03-05 14:25:15,800 - INFO - Fetched Zendesk ticket 42513 successfully
+2026-03-05 14:25:15,801 - INFO - Fetching Zendesk comments for ticket 42513
+2026-03-05 14:25:16,064 - INFO - Fetched 2 Zendesk comments for ticket 42513
+2026-03-05 14:25:16,064 - INFO - Fetching Zendesk ticket 42512
+2026-03-05 14:25:16,321 - INFO - Fetched Zendesk ticket 42512 successfully
+2026-03-05 14:25:16,322 - INFO - Fetching Zendesk comments for ticket 42512
+2026-03-05 14:25:16,694 - INFO - Fetched 6 Zendesk comments for ticket 42512
+2026-03-05 14:25:16,694 - INFO - Fetching Zendesk ticket 42511
+2026-03-05 14:25:16,960 - INFO - Fetched Zendesk ticket 42511 successfully
+2026-03-05 14:25:16,961 - INFO - Fetching Zendesk comments for ticket 42511
+2026-03-05 14:25:17,278 - INFO - Fetched 8 Zendesk comments for ticket 42511
+2026-03-05 14:25:17,278 - INFO - Fetching Zendesk ticket 42510
+2026-03-05 14:25:17,519 - INFO - Fetched Zendesk ticket 42510 successfully
+2026-03-05 14:25:17,519 - INFO - Fetching Zendesk comments for ticket 42510
+2026-03-05 14:25:17,760 - INFO - Fetched 2 Zendesk comments for ticket 42510
+2026-03-05 14:25:17,761 - INFO - Fetching Zendesk ticket 42509
+2026-03-05 14:25:18,010 - INFO - Fetched Zendesk ticket 42509 successfully
+2026-03-05 14:25:18,011 - INFO - Fetching Zendesk comments for ticket 42509
+2026-03-05 14:25:18,279 - INFO - Fetched 2 Zendesk comments for ticket 42509
+2026-03-05 14:25:18,279 - INFO - Fetching Zendesk ticket 42508
+2026-03-05 14:25:18,531 - INFO - Fetched Zendesk ticket 42508 successfully
+2026-03-05 14:25:18,531 - INFO - Fetching Zendesk comments for ticket 42508
+2026-03-05 14:25:18,873 - INFO - Fetched 9 Zendesk comments for ticket 42508
+2026-03-05 14:25:18,877 - INFO - Fetching Zendesk ticket 42507
+2026-03-05 14:25:19,141 - INFO - Fetched Zendesk ticket 42507 successfully
+2026-03-05 14:25:19,141 - INFO - Fetching Zendesk comments for ticket 42507
+2026-03-05 14:25:19,591 - INFO - Fetched 14 Zendesk comments for ticket 42507
+2026-03-05 14:25:19,591 - INFO - Fetching Zendesk ticket 42506
+2026-03-05 14:25:19,852 - INFO - Fetched Zendesk ticket 42506 successfully
+2026-03-05 14:25:19,852 - INFO - Fetching Zendesk comments for ticket 42506
+2026-03-05 14:25:20,211 - INFO - Fetched 8 Zendesk comments for ticket 42506
+2026-03-05 14:25:20,211 - INFO - Fetching Zendesk ticket 42505
+2026-03-05 14:25:20,482 - INFO - Fetched Zendesk ticket 42505 successfully
+2026-03-05 14:25:20,483 - INFO - Fetching Zendesk comments for ticket 42505
+2026-03-05 14:25:20,785 - INFO - Fetched 4 Zendesk comments for ticket 42505
+2026-03-05 14:25:20,785 - INFO - Fetching Zendesk ticket 42504
+2026-03-05 14:25:21,048 - INFO - Fetched Zendesk ticket 42504 successfully
+2026-03-05 14:25:21,049 - INFO - Fetching Zendesk comments for ticket 42504
+2026-03-05 14:25:21,306 - INFO - Fetched 4 Zendesk comments for ticket 42504
+2026-03-05 14:25:21,306 - INFO - Fetching Zendesk ticket 42503
+2026-03-05 14:25:21,558 - INFO - Fetched Zendesk ticket 42503 successfully
+2026-03-05 14:25:21,558 - INFO - Fetching Zendesk comments for ticket 42503
+2026-03-05 14:25:21,819 - INFO - Fetched 2 Zendesk comments for ticket 42503
+2026-03-05 14:25:21,819 - INFO - Fetching Zendesk ticket 42502
+2026-03-05 14:25:22,057 - INFO - Fetched Zendesk ticket 42502 successfully
+2026-03-05 14:25:22,057 - INFO - Fetching Zendesk comments for ticket 42502
+2026-03-05 14:25:22,322 - INFO - Fetched 2 Zendesk comments for ticket 42502
+2026-03-05 14:25:22,323 - INFO - Fetching Zendesk ticket 42500
+2026-03-05 14:25:22,607 - INFO - Fetched Zendesk ticket 42500 successfully
+2026-03-05 14:25:22,607 - INFO - Fetching Zendesk comments for ticket 42500
+2026-03-05 14:25:22,928 - INFO - Fetched 5 Zendesk comments for ticket 42500
+2026-03-05 14:25:22,929 - INFO - Fetching Zendesk ticket 42499
+2026-03-05 14:25:23,192 - INFO - Fetched Zendesk ticket 42499 successfully
+2026-03-05 14:25:23,192 - INFO - Fetching Zendesk comments for ticket 42499
+2026-03-05 14:25:23,453 - INFO - Fetched 2 Zendesk comments for ticket 42499
+2026-03-05 14:25:23,453 - INFO - Fetching Zendesk ticket 42498
+2026-03-05 14:25:23,719 - INFO - Fetched Zendesk ticket 42498 successfully
+2026-03-05 14:25:23,719 - INFO - Fetching Zendesk comments for ticket 42498
+2026-03-05 14:25:23,968 - INFO - Fetched 2 Zendesk comments for ticket 42498
+2026-03-05 14:25:23,968 - INFO - Fetching Zendesk ticket 42497
+2026-03-05 14:25:24,206 - INFO - Fetched Zendesk ticket 42497 successfully
+2026-03-05 14:25:24,206 - INFO - Fetching Zendesk comments for ticket 42497
+2026-03-05 14:25:24,469 - INFO - Fetched 2 Zendesk comments for ticket 42497
+2026-03-05 14:25:24,469 - INFO - Fetching Zendesk ticket 42496
+2026-03-05 14:25:24,752 - INFO - Fetched Zendesk ticket 42496 successfully
+2026-03-05 14:25:24,752 - INFO - Fetching Zendesk comments for ticket 42496
+2026-03-05 14:25:25,027 - INFO - Fetched 2 Zendesk comments for ticket 42496
+2026-03-05 14:25:25,028 - INFO - Fetching Zendesk ticket 42495
+2026-03-05 14:25:25,283 - INFO - Fetched Zendesk ticket 42495 successfully
+2026-03-05 14:25:25,286 - INFO - Fetching Zendesk comments for ticket 42495
+2026-03-05 14:25:25,638 - INFO - Fetched 3 Zendesk comments for ticket 42495
+2026-03-05 14:25:25,640 - INFO - Fetching Zendesk ticket 42494
+2026-03-05 14:25:25,916 - INFO - Fetched Zendesk ticket 42494 successfully
+2026-03-05 14:25:25,918 - INFO - Fetching Zendesk comments for ticket 42494
+2026-03-05 14:25:26,218 - INFO - Fetched 2 Zendesk comments for ticket 42494
+2026-03-05 14:25:26,218 - INFO - Fetching Zendesk ticket 42493
+2026-03-05 14:25:26,506 - INFO - Fetched Zendesk ticket 42493 successfully
+2026-03-05 14:25:26,506 - INFO - Fetching Zendesk comments for ticket 42493
+2026-03-05 14:25:26,794 - INFO - Fetched 6 Zendesk comments for ticket 42493
+2026-03-05 14:25:26,794 - INFO - Fetching Zendesk ticket 42492
+2026-03-05 14:25:27,099 - INFO - Fetched Zendesk ticket 42492 successfully
+2026-03-05 14:25:27,100 - INFO - Fetching Zendesk comments for ticket 42492
+2026-03-05 14:25:27,353 - INFO - Fetched 3 Zendesk comments for ticket 42492
+2026-03-05 14:25:27,354 - INFO - Fetching Zendesk ticket 42491
+2026-03-05 14:25:27,657 - INFO - Fetched Zendesk ticket 42491 successfully
+2026-03-05 14:25:27,657 - INFO - Fetching Zendesk comments for ticket 42491
+2026-03-05 14:25:27,957 - INFO - Fetched 4 Zendesk comments for ticket 42491
+2026-03-05 14:25:27,957 - INFO - Fetching Zendesk ticket 42490
+2026-03-05 14:25:28,453 - INFO - Fetched Zendesk ticket 42490 successfully
+2026-03-05 14:25:28,453 - INFO - Fetching Zendesk comments for ticket 42490
+2026-03-05 14:25:28,698 - INFO - Fetched 1 Zendesk comments for ticket 42490
+2026-03-05 14:25:28,698 - INFO - Fetching Zendesk ticket 42489
+2026-03-05 14:25:28,952 - INFO - Fetched Zendesk ticket 42489 successfully
+2026-03-05 14:25:28,952 - INFO - Fetching Zendesk comments for ticket 42489
+2026-03-05 14:25:29,249 - INFO - Fetched 2 Zendesk comments for ticket 42489
+2026-03-05 14:25:29,250 - INFO - Fetching Zendesk ticket 42488
+2026-03-05 14:25:29,515 - INFO - Fetched Zendesk ticket 42488 successfully
+2026-03-05 14:25:29,516 - INFO - Fetching Zendesk comments for ticket 42488
+2026-03-05 14:25:29,822 - INFO - Fetched 3 Zendesk comments for ticket 42488
+2026-03-05 14:38:03,063 - INFO - zendesk mcp server started
+2026-03-05 14:38:03,075 - INFO - Fetching Zendesk ticket field definitions
+2026-03-05 14:38:03,816 - INFO - Fetched Zendesk ticket field definitions successfully
+2026-03-05 14:38:03,818 - INFO - Fetching Zendesk ticket field options for field 25497966
+2026-03-05 14:38:04,372 - INFO - Fetched Zendesk ticket field options for field 25497966 successfully
+2026-03-05 14:38:04,372 - INFO - Fetching Zendesk ticket field options for field 360038406752
+2026-03-05 14:38:04,942 - INFO - Fetched Zendesk ticket field options for field 360038406752 successfully
+2026-03-05 14:38:04,942 - INFO - Fetching Zendesk ticket field options for field 4415622115985
+2026-03-05 14:38:05,705 - INFO - Fetched Zendesk ticket field options for field 4415622115985 successfully
+2026-03-05 14:38:05,711 - INFO - Fetching Zendesk ticket field options for field 11068759378973
+2026-03-05 14:38:05,931 - INFO - Fetched Zendesk ticket field options for field 11068759378973 successfully
+2026-03-05 14:38:05,931 - INFO - Loaded ticket field option maps for 4 relevant fields
+2026-03-05 14:38:06,075 - INFO - Processing request of type ListToolsRequest
+2026-03-05 14:38:06,077 - INFO - Processing request of type ListPromptsRequest
+2026-03-05 14:38:06,083 - INFO - Processing request of type ListResourcesRequest
+2026-03-05 14:44:43,832 - INFO - Processing request of type CallToolRequest
+2026-03-05 14:44:43,851 - INFO - Fetching Zendesk tickets from search API: https://appdome.zendesk.com/api/v2/search.json?query=type%3Aticket+-tags%3Ainternal+created%3E2026-03-04T19%3A44%3A43%2B00%3A00&page=1&per_page=100&sort_by=created_at&sort_order=desc
+2026-03-05 14:44:43,851 - INFO - Zendesk search query: type:ticket -tags:internal created>2026-03-04T19:44:43+00:00
+2026-03-05 14:44:45,242 - INFO - Fetched 51 raw search results from Zendesk
+2026-03-05 14:44:45,243 - INFO - Fetching Zendesk ticket 42544
+2026-03-05 14:44:45,791 - INFO - Fetching Zendesk ticket fields
+2026-03-05 14:44:46,150 - INFO - Fetched Zendesk ticket fields successfully
+2026-03-05 14:44:46,151 - INFO - Fetched Zendesk ticket 42544 successfully
+2026-03-05 14:44:46,153 - INFO - Fetching Zendesk comments for ticket 42544
+2026-03-05 14:44:46,506 - INFO - Fetched 4 Zendesk comments for ticket 42544
+2026-03-05 14:44:46,507 - INFO - Fetching Zendesk ticket 42543
+2026-03-05 14:44:47,057 - INFO - Fetched Zendesk ticket 42543 successfully
+2026-03-05 14:44:47,057 - INFO - Fetching Zendesk comments for ticket 42543
+2026-03-05 14:44:47,304 - INFO - Fetched 1 Zendesk comments for ticket 42543
+2026-03-05 14:44:47,304 - INFO - Fetching Zendesk ticket 42542
+2026-03-05 14:44:47,554 - INFO - Fetched Zendesk ticket 42542 successfully
+2026-03-05 14:44:47,554 - INFO - Fetching Zendesk comments for ticket 42542
+2026-03-05 14:44:47,824 - INFO - Fetched 1 Zendesk comments for ticket 42542
+2026-03-05 14:44:47,824 - INFO - Fetching Zendesk ticket 42541
+2026-03-05 14:44:48,388 - INFO - Fetched Zendesk ticket 42541 successfully
+2026-03-05 14:44:48,388 - INFO - Fetching Zendesk comments for ticket 42541
+2026-03-05 14:44:48,952 - INFO - Fetched 2 Zendesk comments for ticket 42541
+2026-03-05 14:44:48,953 - INFO - Fetching Zendesk ticket 42540
+2026-03-05 14:44:49,253 - INFO - Fetched Zendesk ticket 42540 successfully
+2026-03-05 14:44:49,254 - INFO - Fetching Zendesk comments for ticket 42540
+2026-03-05 14:44:49,521 - INFO - Fetched 2 Zendesk comments for ticket 42540
+2026-03-05 14:44:49,522 - INFO - Fetching Zendesk ticket 42539
+2026-03-05 14:44:49,779 - INFO - Fetched Zendesk ticket 42539 successfully
+2026-03-05 14:44:49,779 - INFO - Fetching Zendesk comments for ticket 42539
+2026-03-05 14:44:50,042 - INFO - Fetched 2 Zendesk comments for ticket 42539
+2026-03-05 14:44:50,043 - INFO - Fetching Zendesk ticket 42538
+2026-03-05 14:44:50,587 - INFO - Fetched Zendesk ticket 42538 successfully
+2026-03-05 14:44:50,587 - INFO - Fetching Zendesk comments for ticket 42538
+2026-03-05 14:44:51,091 - INFO - Fetched 2 Zendesk comments for ticket 42538
+2026-03-05 14:44:51,091 - INFO - Fetching Zendesk ticket 42537
+2026-03-05 14:44:51,328 - INFO - Fetched Zendesk ticket 42537 successfully
+2026-03-05 14:44:51,328 - INFO - Fetching Zendesk comments for ticket 42537
+2026-03-05 14:44:51,710 - INFO - Fetched 2 Zendesk comments for ticket 42537
+2026-03-05 14:44:51,724 - INFO - Fetching Zendesk ticket 42536
+2026-03-05 14:44:51,972 - INFO - Fetched Zendesk ticket 42536 successfully
+2026-03-05 14:44:51,972 - INFO - Fetching Zendesk comments for ticket 42536
+2026-03-05 14:44:52,229 - INFO - Fetched 2 Zendesk comments for ticket 42536
+2026-03-05 14:44:52,229 - INFO - Fetching Zendesk ticket 42535
+2026-03-05 14:44:52,459 - INFO - Fetched Zendesk ticket 42535 successfully
+2026-03-05 14:44:52,459 - INFO - Fetching Zendesk comments for ticket 42535
+2026-03-05 14:44:52,722 - INFO - Fetched 2 Zendesk comments for ticket 42535
+2026-03-05 14:44:52,722 - INFO - Fetching Zendesk ticket 42534
+2026-03-05 14:44:52,990 - INFO - Fetched Zendesk ticket 42534 successfully
+2026-03-05 14:44:52,990 - INFO - Fetching Zendesk comments for ticket 42534
+2026-03-05 14:44:53,555 - INFO - Fetched 2 Zendesk comments for ticket 42534
+2026-03-05 14:44:53,559 - INFO - Fetching Zendesk ticket 42533
+2026-03-05 14:44:53,830 - INFO - Fetched Zendesk ticket 42533 successfully
+2026-03-05 14:44:53,830 - INFO - Fetching Zendesk comments for ticket 42533
+2026-03-05 14:44:54,091 - INFO - Fetched 2 Zendesk comments for ticket 42533
+2026-03-05 14:44:54,091 - INFO - Fetching Zendesk ticket 42532
+2026-03-05 14:44:54,405 - INFO - Fetched Zendesk ticket 42532 successfully
+2026-03-05 14:44:54,405 - INFO - Fetching Zendesk comments for ticket 42532
+2026-03-05 14:44:54,691 - INFO - Fetched 2 Zendesk comments for ticket 42532
+2026-03-05 14:44:54,691 - INFO - Fetching Zendesk ticket 42531
+2026-03-05 14:44:54,968 - INFO - Fetched Zendesk ticket 42531 successfully
+2026-03-05 14:44:54,968 - INFO - Fetching Zendesk comments for ticket 42531
+2026-03-05 14:44:55,269 - INFO - Fetched 2 Zendesk comments for ticket 42531
+2026-03-05 14:44:55,269 - INFO - Fetching Zendesk ticket 42530
+2026-03-05 14:44:55,763 - INFO - Fetched Zendesk ticket 42530 successfully
+2026-03-05 14:44:55,764 - INFO - Fetching Zendesk comments for ticket 42530
+2026-03-05 14:44:56,012 - INFO - Fetched 2 Zendesk comments for ticket 42530
+2026-03-05 14:44:56,014 - INFO - Fetching Zendesk ticket 42529
+2026-03-05 14:44:56,264 - INFO - Fetched Zendesk ticket 42529 successfully
+2026-03-05 14:44:56,264 - INFO - Fetching Zendesk comments for ticket 42529
+2026-03-05 14:44:56,524 - INFO - Fetched 2 Zendesk comments for ticket 42529
+2026-03-05 14:44:56,527 - INFO - Fetching Zendesk ticket 42528
+2026-03-05 14:44:56,752 - INFO - Fetched Zendesk ticket 42528 successfully
+2026-03-05 14:44:56,752 - INFO - Fetching Zendesk comments for ticket 42528
+2026-03-05 14:44:56,986 - INFO - Fetched 2 Zendesk comments for ticket 42528
+2026-03-05 14:44:56,986 - INFO - Fetching Zendesk ticket 42527
+2026-03-05 14:44:57,247 - INFO - Fetched Zendesk ticket 42527 successfully
+2026-03-05 14:44:57,248 - INFO - Fetching Zendesk comments for ticket 42527
+2026-03-05 14:44:57,544 - INFO - Fetched 2 Zendesk comments for ticket 42527
+2026-03-05 14:44:57,545 - INFO - Fetching Zendesk ticket 42526
+2026-03-05 14:44:57,783 - INFO - Fetched Zendesk ticket 42526 successfully
+2026-03-05 14:44:57,783 - INFO - Fetching Zendesk comments for ticket 42526
+2026-03-05 14:44:58,111 - INFO - Fetched 6 Zendesk comments for ticket 42526
+2026-03-05 14:44:58,112 - INFO - Fetching Zendesk ticket 42525
+2026-03-05 14:44:58,408 - INFO - Fetched Zendesk ticket 42525 successfully
+2026-03-05 14:44:58,408 - INFO - Fetching Zendesk comments for ticket 42525
+2026-03-05 14:44:59,033 - INFO - Fetched 1 Zendesk comments for ticket 42525
+2026-03-05 14:44:59,035 - INFO - Fetching Zendesk ticket 42524
+2026-03-05 14:44:59,295 - INFO - Fetched Zendesk ticket 42524 successfully
+2026-03-05 14:44:59,295 - INFO - Fetching Zendesk comments for ticket 42524
+2026-03-05 14:44:59,568 - INFO - Fetched 6 Zendesk comments for ticket 42524
+2026-03-05 14:44:59,568 - INFO - Fetching Zendesk ticket 42523
+2026-03-05 14:45:00,059 - INFO - Fetched Zendesk ticket 42523 successfully
+2026-03-05 14:45:00,064 - INFO - Fetching Zendesk comments for ticket 42523
+2026-03-05 14:45:00,364 - INFO - Fetched 4 Zendesk comments for ticket 42523
+2026-03-05 14:45:00,365 - INFO - Fetching Zendesk ticket 42522
+2026-03-05 14:45:00,651 - INFO - Fetched Zendesk ticket 42522 successfully
+2026-03-05 14:45:00,652 - INFO - Fetching Zendesk comments for ticket 42522
+2026-03-05 14:45:00,984 - INFO - Fetched 4 Zendesk comments for ticket 42522
+2026-03-05 14:45:00,985 - INFO - Fetching Zendesk ticket 42518
+2026-03-05 14:45:01,249 - INFO - Fetched Zendesk ticket 42518 successfully
+2026-03-05 14:45:01,249 - INFO - Fetching Zendesk comments for ticket 42518
+2026-03-05 14:45:01,504 - INFO - Fetched 5 Zendesk comments for ticket 42518
+2026-03-05 14:45:01,504 - INFO - Fetching Zendesk ticket 42517
+2026-03-05 14:45:01,761 - INFO - Fetched Zendesk ticket 42517 successfully
+2026-03-05 14:45:01,761 - INFO - Fetching Zendesk comments for ticket 42517
+2026-03-05 14:45:02,022 - INFO - Fetched 2 Zendesk comments for ticket 42517
+2026-03-05 14:45:02,022 - INFO - Fetching Zendesk ticket 42516
+2026-03-05 14:45:02,523 - INFO - Fetched Zendesk ticket 42516 successfully
+2026-03-05 14:45:02,523 - INFO - Fetching Zendesk comments for ticket 42516
+2026-03-05 14:45:02,800 - INFO - Fetched 4 Zendesk comments for ticket 42516
+2026-03-05 14:45:02,800 - INFO - Fetching Zendesk ticket 42515
+2026-03-05 14:45:03,054 - INFO - Fetched Zendesk ticket 42515 successfully
+2026-03-05 14:45:03,054 - INFO - Fetching Zendesk comments for ticket 42515
+2026-03-05 14:45:03,339 - INFO - Fetched 6 Zendesk comments for ticket 42515
+2026-03-05 14:45:03,339 - INFO - Fetching Zendesk ticket 42514
+2026-03-05 14:45:03,620 - INFO - Fetched Zendesk ticket 42514 successfully
+2026-03-05 14:45:03,620 - INFO - Fetching Zendesk comments for ticket 42514
+2026-03-05 14:45:03,873 - INFO - Fetched 3 Zendesk comments for ticket 42514
+2026-03-05 14:45:03,873 - INFO - Fetching Zendesk ticket 42513
+2026-03-05 14:45:04,150 - INFO - Fetched Zendesk ticket 42513 successfully
+2026-03-05 14:45:04,150 - INFO - Fetching Zendesk comments for ticket 42513
+2026-03-05 14:45:04,404 - INFO - Fetched 2 Zendesk comments for ticket 42513
+2026-03-05 14:45:04,404 - INFO - Fetching Zendesk ticket 42512
+2026-03-05 14:45:04,685 - INFO - Fetched Zendesk ticket 42512 successfully
+2026-03-05 14:45:04,685 - INFO - Fetching Zendesk comments for ticket 42512
+2026-03-05 14:45:05,210 - INFO - Fetched 6 Zendesk comments for ticket 42512
+2026-03-05 14:45:05,211 - INFO - Fetching Zendesk ticket 42511
+2026-03-05 14:45:05,472 - INFO - Fetched Zendesk ticket 42511 successfully
+2026-03-05 14:45:05,472 - INFO - Fetching Zendesk comments for ticket 42511
+2026-03-05 14:45:05,926 - INFO - Fetched 8 Zendesk comments for ticket 42511
+2026-03-05 14:45:05,926 - INFO - Fetching Zendesk ticket 42510
+2026-03-05 14:45:06,202 - INFO - Fetched Zendesk ticket 42510 successfully
+2026-03-05 14:45:06,202 - INFO - Fetching Zendesk comments for ticket 42510
+2026-03-05 14:45:06,450 - INFO - Fetched 2 Zendesk comments for ticket 42510
+2026-03-05 14:45:06,451 - INFO - Fetching Zendesk ticket 42509
+2026-03-05 14:45:06,688 - INFO - Fetched Zendesk ticket 42509 successfully
+2026-03-05 14:45:06,688 - INFO - Fetching Zendesk comments for ticket 42509
+2026-03-05 14:45:06,927 - INFO - Fetched 2 Zendesk comments for ticket 42509
+2026-03-05 14:45:06,927 - INFO - Fetching Zendesk ticket 42508
+2026-03-05 14:45:07,195 - INFO - Fetched Zendesk ticket 42508 successfully
+2026-03-05 14:45:07,196 - INFO - Fetching Zendesk comments for ticket 42508
+2026-03-05 14:45:07,532 - INFO - Fetched 9 Zendesk comments for ticket 42508
+2026-03-05 14:45:07,533 - INFO - Fetching Zendesk ticket 42507
+2026-03-05 14:45:07,784 - INFO - Fetched Zendesk ticket 42507 successfully
+2026-03-05 14:45:07,785 - INFO - Fetching Zendesk comments for ticket 42507
+2026-03-05 14:45:08,187 - INFO - Fetched 14 Zendesk comments for ticket 42507
+2026-03-05 14:45:08,188 - INFO - Fetching Zendesk ticket 42506
+2026-03-05 14:45:08,455 - INFO - Fetched Zendesk ticket 42506 successfully
+2026-03-05 14:45:08,455 - INFO - Fetching Zendesk comments for ticket 42506
+2026-03-05 14:45:08,774 - INFO - Fetched 8 Zendesk comments for ticket 42506
+2026-03-05 14:45:08,775 - INFO - Fetching Zendesk ticket 42505
+2026-03-05 14:45:09,038 - INFO - Fetched Zendesk ticket 42505 successfully
+2026-03-05 14:45:09,039 - INFO - Fetching Zendesk comments for ticket 42505
+2026-03-05 14:45:09,319 - INFO - Fetched 4 Zendesk comments for ticket 42505
+2026-03-05 14:45:09,320 - INFO - Fetching Zendesk ticket 42504
+2026-03-05 14:45:09,607 - INFO - Fetched Zendesk ticket 42504 successfully
+2026-03-05 14:45:09,608 - INFO - Fetching Zendesk comments for ticket 42504
+2026-03-05 14:45:09,924 - INFO - Fetched 4 Zendesk comments for ticket 42504
+2026-03-05 14:45:09,924 - INFO - Fetching Zendesk ticket 42503
+2026-03-05 14:45:10,164 - INFO - Fetched Zendesk ticket 42503 successfully
+2026-03-05 14:45:10,165 - INFO - Fetching Zendesk comments for ticket 42503
+2026-03-05 14:45:10,430 - INFO - Fetched 2 Zendesk comments for ticket 42503
+2026-03-05 14:45:10,431 - INFO - Fetching Zendesk ticket 42502
+2026-03-05 14:45:10,690 - INFO - Fetched Zendesk ticket 42502 successfully
+2026-03-05 14:45:10,690 - INFO - Fetching Zendesk comments for ticket 42502
+2026-03-05 14:45:10,945 - INFO - Fetched 2 Zendesk comments for ticket 42502
+2026-03-05 14:45:10,947 - INFO - Fetching Zendesk ticket 42500
+2026-03-05 14:45:11,211 - INFO - Fetched Zendesk ticket 42500 successfully
+2026-03-05 14:45:11,211 - INFO - Fetching Zendesk comments for ticket 42500
+2026-03-05 14:45:11,615 - INFO - Fetched 5 Zendesk comments for ticket 42500
+2026-03-05 14:45:11,615 - INFO - Fetching Zendesk ticket 42499
+2026-03-05 14:45:11,873 - INFO - Fetched Zendesk ticket 42499 successfully
+2026-03-05 14:45:11,873 - INFO - Fetching Zendesk comments for ticket 42499
+2026-03-05 14:45:12,134 - INFO - Fetched 2 Zendesk comments for ticket 42499
+2026-03-05 14:45:12,134 - INFO - Fetching Zendesk ticket 42498
+2026-03-05 14:45:12,381 - INFO - Fetched Zendesk ticket 42498 successfully
+2026-03-05 14:45:12,381 - INFO - Fetching Zendesk comments for ticket 42498
+2026-03-05 14:45:12,650 - INFO - Fetched 2 Zendesk comments for ticket 42498
+2026-03-05 14:45:12,650 - INFO - Fetching Zendesk ticket 42497
+2026-03-05 14:45:12,898 - INFO - Fetched Zendesk ticket 42497 successfully
+2026-03-05 14:45:12,898 - INFO - Fetching Zendesk comments for ticket 42497
+2026-03-05 14:45:13,178 - INFO - Fetched 2 Zendesk comments for ticket 42497
+2026-03-05 14:45:13,178 - INFO - Fetching Zendesk ticket 42496
+2026-03-05 14:45:13,426 - INFO - Fetched Zendesk ticket 42496 successfully
+2026-03-05 14:45:13,426 - INFO - Fetching Zendesk comments for ticket 42496
+2026-03-05 14:45:13,670 - INFO - Fetched 2 Zendesk comments for ticket 42496
+2026-03-05 14:45:13,670 - INFO - Fetching Zendesk ticket 42495
+2026-03-05 14:45:13,931 - INFO - Fetched Zendesk ticket 42495 successfully
+2026-03-05 14:45:13,931 - INFO - Fetching Zendesk comments for ticket 42495
+2026-03-05 14:45:14,225 - INFO - Fetched 3 Zendesk comments for ticket 42495
+2026-03-05 14:45:14,225 - INFO - Fetching Zendesk ticket 42494
+2026-03-05 14:45:14,485 - INFO - Fetched Zendesk ticket 42494 successfully
+2026-03-05 14:45:14,485 - INFO - Fetching Zendesk comments for ticket 42494
+2026-03-05 14:45:14,800 - INFO - Fetched 2 Zendesk comments for ticket 42494
+2026-03-05 14:45:14,801 - INFO - Fetching Zendesk ticket 42493
+2026-03-05 14:45:15,071 - INFO - Fetched Zendesk ticket 42493 successfully
+2026-03-05 14:45:15,072 - INFO - Fetching Zendesk comments for ticket 42493
+2026-03-05 14:45:15,479 - INFO - Fetched 6 Zendesk comments for ticket 42493
+2026-03-05 14:45:15,480 - INFO - Fetching Zendesk ticket 42492
+2026-03-05 14:45:15,724 - INFO - Fetched Zendesk ticket 42492 successfully
+2026-03-05 14:45:15,724 - INFO - Fetching Zendesk comments for ticket 42492
+2026-03-05 14:45:16,023 - INFO - Fetched 3 Zendesk comments for ticket 42492
+2026-03-05 14:45:16,023 - INFO - Fetching Zendesk ticket 42491
+2026-03-05 14:45:16,294 - INFO - Fetched Zendesk ticket 42491 successfully
+2026-03-05 14:45:16,295 - INFO - Fetching Zendesk comments for ticket 42491
+2026-03-05 14:45:16,557 - INFO - Fetched 4 Zendesk comments for ticket 42491
+2026-03-05 14:45:16,557 - INFO - Fetching Zendesk ticket 42490
+2026-03-05 14:45:16,808 - INFO - Fetched Zendesk ticket 42490 successfully
+2026-03-05 14:45:16,808 - INFO - Fetching Zendesk comments for ticket 42490
+2026-03-05 14:45:17,064 - INFO - Fetched 1 Zendesk comments for ticket 42490

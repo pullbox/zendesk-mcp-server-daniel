@@ -318,6 +318,21 @@ class ScanTicketsInTroubleResult(BaseModel):
     tickets: list[TicketTroubleAssessment]
 
 
+TROUBLE_FLAG_WEIGHTS: dict[str, int] = {
+    "missing_initial_response": 34,
+    "crash_process_gap": 45,
+    "status_fields_incomplete": 24,
+    "customer_comment_no_response": 30,
+    "solved_without_customer_confirmation": 10,
+    "high_priority_no_recent_updates": 25,
+    "late_initial_response": 20,
+    "late_stacktrace_request": 44,
+    "title_incorrect": 45,
+}
+SEVERITY_FALLBACK_WEIGHTS = {"high": 30, "medium": 15, "low": 5}
+SEVERITY_RANK = {"high": 3, "medium": 2, "low": 1}
+
+
 def _parse_iso_datetime(value: str | None) -> datetime | None:
     if not value:
         return None
@@ -514,17 +529,30 @@ def _build_ticket_trouble_assessment(
                     )
                 )
 
-    risk_weight = {"high": 30, "medium": 15, "low": 5}
-    risk_score = min(100, sum(risk_weight.get(flag.severity, 5) for flag in flags))
+    sorted_flags = sorted(
+        flags,
+        key=lambda flag: (
+            -TROUBLE_FLAG_WEIGHTS.get(flag.code, SEVERITY_FALLBACK_WEIGHTS.get(flag.severity, 5)),
+            -SEVERITY_RANK.get(flag.severity, 0),
+            flag.code,
+        ),
+    )
+    risk_score = min(
+        100,
+        sum(
+            TROUBLE_FLAG_WEIGHTS.get(flag.code, SEVERITY_FALLBACK_WEIGHTS.get(flag.severity, 5))
+            for flag in sorted_flags
+        ),
+    )
 
     return TicketTroubleAssessment(
         ticket_id=ticket_id,
         subject=subject,
         status=status,
         priority=priority,
-        in_trouble=bool(flags),
+        in_trouble=bool(sorted_flags),
         risk_score=risk_score,
-        flags=flags,
+        flags=sorted_flags,
     )
 
 
@@ -741,6 +769,10 @@ def scan_tickets_in_trouble(
         )
         assessments.append(assessment)
 
+    assessments.sort(
+        key=lambda ticket: (ticket.in_trouble, ticket.risk_score, ticket.ticket_id),
+        reverse=True,
+    )
     in_trouble_count = len([ticket for ticket in assessments if ticket.in_trouble])
     return ScanTicketsInTroubleResult(
         created_last_hours=created_last_hours,

@@ -572,9 +572,104 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
         self.assertEqual(structured["scanned_count"], 1)
         self.assertEqual(structured["in_trouble_count"], 1)
         flag_codes = [flag["code"] for flag in structured["tickets"][0]["flags"]]
+        self.assertEqual(flag_codes[0], "crash_process_gap")
         self.assertIn("customer_comment_no_response", flag_codes)
         self.assertIn("solved_without_customer_confirmation", flag_codes)
         self.assertIn("high_priority_no_recent_updates", flag_codes)
+        self.assertEqual(structured["tickets"][0]["risk_score"], 100)
+        self.assertFalse(response.root.isError)
+
+    def test_scan_tickets_in_trouble_orders_tickets_by_weighted_risk(self) -> None:
+        list_payload = {
+            "tickets": [
+                {"id": 200, "subject": "Login issue", "status": "open", "priority": "normal"},
+                {"id": 100, "subject": "ACME | Android | Crash", "status": "open", "priority": "high"},
+            ],
+            "count": 2,
+            "page": 1,
+            "per_page": 25,
+            "sort_by": "created_at",
+            "sort_order": "desc",
+            "filters": {
+                "created_last_hours": 4,
+                "exclude_internal": True,
+            },
+            "has_more": False,
+            "next_page": None,
+            "previous_page": None,
+        }
+        full_ticket_by_id = {
+            200: {
+                "id": 200,
+                "subject": "Login issue",
+                "status": "open",
+                "priority": "normal",
+                "created_at": "2026-03-05T10:00:00Z",
+                "updated_at": "2026-03-05T10:20:00Z",
+                "requester_id": 1001,
+                "tags": [],
+                "custom_fields": {
+                    "Status With": "customer",
+                    "Support Stage": "investigation",
+                    "Release Stage": "n/a",
+                },
+            },
+            100: {
+                "id": 100,
+                "subject": "ACME | Android | Crash",
+                "status": "open",
+                "priority": "high",
+                "created_at": "2026-03-05T10:00:00Z",
+                "updated_at": "2026-03-05T19:00:00Z",
+                "requester_id": 1002,
+                "tags": [],
+                "custom_fields": {},
+                "stale_age_hours": 9,
+            },
+        }
+        comments_by_id = {
+            200: [
+                {
+                    "author_id": 2002,
+                    "public": True,
+                    "body": "We are investigating.",
+                    "html_body": "<p>We are investigating.</p>",
+                    "created_at": "2026-03-05T10:20:00Z",
+                    "attachments": [],
+                }
+            ],
+            100: [],
+        }
+
+        request = CallToolRequest(
+            method="tools/call",
+            params=CallToolRequestParams(
+                name="scan_tickets_in_trouble",
+                arguments={"created_last_hours": 4, "per_page": 25},
+            ),
+        )
+
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        with (
+            patch.object(server_module, "zendesk_client") as mock_client,
+            patch.object(
+                server_module,
+                "_prepare_ticket_payload",
+                side_effect=lambda ticket_id: full_ticket_by_id[ticket_id],
+            ),
+        ):
+            mock_client.get_tickets.return_value = list_payload
+            mock_client.get_ticket_comments.side_effect = lambda ticket_id: comments_by_id[ticket_id]
+
+            handler = server_module.mcp._mcp_server.request_handlers[CallToolRequest]
+            response = asyncio.run(handler(request))
+
+        structured = response.root.structuredContent
+        self.assertEqual([ticket["ticket_id"] for ticket in structured["tickets"]], [100, 200])
+        self.assertGreater(structured["tickets"][0]["risk_score"], structured["tickets"][1]["risk_score"])
+        self.assertEqual(structured["tickets"][0]["flags"][0]["code"], "missing_initial_response")
         self.assertFalse(response.root.isError)
 
     def test_sample_solved_tickets_for_agent_is_deterministic_with_seed(self) -> None:
