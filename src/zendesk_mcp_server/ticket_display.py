@@ -3,6 +3,7 @@ from typing import Any
 from zendesk_mcp_server.ticket_field_metadata import (
     RELEVANT_TICKET_FIELD_ALIASES,
     TicketFieldOptionResolver,
+    normalize_field_value,
 )
 
 
@@ -18,12 +19,22 @@ def apply_ticket_field_displays(
     if not isinstance(custom_fields, dict):
         return ticket_payload
 
+    normalized_custom_fields: dict[str, Any] = {}
+    for raw_name, raw_value in custom_fields.items():
+        normalized_name = normalize_field_value(raw_name)
+        if isinstance(normalized_name, str) and normalized_name not in normalized_custom_fields:
+            normalized_custom_fields[normalized_name] = raw_value
+
     filtered_custom_fields: dict[str, Any] = {}
     for source_name, output_name in RELEVANT_TICKET_FIELD_ALIASES.items():
-        if source_name not in custom_fields:
-            continue
+        if source_name in custom_fields:
+            raw_value = custom_fields[source_name]
+        else:
+            normalized_source_name = normalize_field_value(source_name)
+            if not isinstance(normalized_source_name, str) or normalized_source_name not in normalized_custom_fields:
+                continue
+            raw_value = normalized_custom_fields[normalized_source_name]
 
-        raw_value = custom_fields[source_name]
         if output_name == "Escalation Status":
             translated_value = option_resolver.translate(output_name, raw_value)
             ticket["escalation_status_tag"] = raw_value

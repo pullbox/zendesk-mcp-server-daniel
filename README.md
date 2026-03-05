@@ -169,7 +169,7 @@ Search ticket content by phrase, with optional narrowing.
 
 ### scan_tickets_in_trouble
 
-Scan tickets created in the last N hours and flag likely QA/process issues.
+Scan non-solved tickets created in the last N hours and flag likely QA/process issues.
 
 - Input:
   - `created_last_hours` (default `4`)
@@ -184,7 +184,6 @@ Scan tickets created in the last N hours and flag likely QA/process issues.
   - required status/custom-field completeness
   - late or missing initial response
   - customer public comment without follow-up
-  - solved/closed without customer confirmation
   - high-priority tickets with stale updates
 
 ### sample_solved_tickets_for_agent

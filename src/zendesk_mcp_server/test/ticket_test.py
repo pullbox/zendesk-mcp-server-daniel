@@ -480,7 +480,7 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
         self.assertEqual(json.loads(response.root.content[0].text), expected_payload)
         self.assertFalse(response.root.isError)
 
-    def test_scan_tickets_in_trouble_flags_requested_conditions(self) -> None:
+    def test_scan_tickets_in_trouble_excludes_solved_tickets_from_scan(self) -> None:
         list_payload = {
             "tickets": [
                 {
@@ -507,48 +507,6 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
             "next_page": None,
             "previous_page": None,
         }
-        full_ticket_payload = {
-            "id": 777,
-            "subject": "ACME | iOS | Crash after login",
-            "status": "solved",
-            "priority": "high",
-            "created_at": "2026-03-05T10:00:00Z",
-            "updated_at": "2026-03-05T19:30:00Z",
-            "requester_id": 1001,
-            "tags": ["crash_detected"],
-            "custom_fields": {
-                "Status With": "customer",
-                "Support Stage": "investigation",
-            },
-            "stale_age_hours": 9,
-        }
-        comments_payload = [
-            {
-                "author_id": 1001,
-                "public": True,
-                "body": "Any update?",
-                "html_body": "<p>Any update?</p>",
-                "created_at": "2026-03-05T11:00:00Z",
-                "attachments": [],
-            },
-            {
-                "author_id": 2002,
-                "public": True,
-                "body": "We are checking internally.",
-                "html_body": "<p>We are checking internally.</p>",
-                "created_at": "2026-03-05T11:10:00Z",
-                "attachments": [],
-            },
-            {
-                "author_id": 1001,
-                "public": True,
-                "body": "Still broken",
-                "html_body": "<p>Still broken</p>",
-                "created_at": "2026-03-05T12:00:00Z",
-                "attachments": [],
-            },
-        ]
-
         request = CallToolRequest(
             method="tools/call",
             params=CallToolRequestParams(
@@ -562,30 +520,19 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
 
         with (
             patch.object(server_module, "zendesk_client") as mock_client,
-            patch.object(server_module, "_prepare_ticket_payload", return_value=full_ticket_payload),
+            patch.object(server_module, "_prepare_ticket_payload") as mock_prepare_ticket_payload,
         ):
             mock_client.get_tickets.return_value = list_payload
-            mock_client.get_ticket_comments.return_value = comments_payload
 
             handler = server_module.mcp._mcp_server.request_handlers[CallToolRequest]
             response = asyncio.run(handler(request))
 
         structured = response.root.structuredContent
-        self.assertEqual(structured["scanned_count"], 1)
-        self.assertEqual(structured["in_trouble_count"], 1)
-        self.assertEqual(
-            structured["tickets"][0]["ticket_url"],
-            "https://appdomesupport.zendesk.com/agent/tickets/777",
-        )
-        self.assertEqual(
-            structured["tickets"][0]["ticket_link"],
-            "[777](https://appdomesupport.zendesk.com/agent/tickets/777)",
-        )
-        flag_codes = [flag["code"] for flag in structured["tickets"][0]["flags"]]
-        self.assertEqual(flag_codes[0], "crash_process_gap")
-        self.assertIn("solved_without_customer_confirmation", flag_codes)
-        self.assertIn("high_priority_no_recent_updates", flag_codes)
-        self.assertEqual(structured["tickets"][0]["risk_score"], 100)
+        self.assertEqual(structured["scanned_count"], 0)
+        self.assertEqual(structured["in_trouble_count"], 0)
+        self.assertEqual(structured["tickets"], [])
+        mock_prepare_ticket_payload.assert_not_called()
+        mock_client.get_ticket_comments.assert_not_called()
         self.assertFalse(response.root.isError)
 
     def test_scan_tickets_in_trouble_orders_tickets_by_weighted_risk(self) -> None:

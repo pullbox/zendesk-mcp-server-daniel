@@ -61,6 +61,30 @@ class TestTicketFieldDisplay(unittest.TestCase):
         self.assertEqual(result["escalation_status_tag"], "esc_7")
         self.assertEqual(result["escalation_status_display"], "Sol. Delivered")
 
+    def test_apply_ticket_field_displays_accepts_case_and_separator_variants(self) -> None:
+        resolver = TicketFieldOptionResolver(StubZendeskClient())
+        resolver.load()
+
+        payload = {
+            "id": 42526,
+            "custom_fields": {
+                "status with": "support_engineer",
+                "support-stage": "validate_resoution",
+                "release stage": "testing_-_pre-release_uat",
+            },
+        }
+
+        result = apply_ticket_field_displays(payload, resolver)
+
+        self.assertEqual(
+            result["custom_fields"],
+            {
+                "Status With": "Support Engineer",
+                "Support Stage": "Validate Resolution",
+                "Release Stage": "Testing / Pre-Release UAT",
+            },
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

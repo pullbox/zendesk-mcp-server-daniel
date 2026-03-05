@@ -856,6 +856,8 @@ def scan_tickets_in_trouble(
 
     assessments: list[TicketTroubleAssessment] = []
     for ticket in list_result.get("tickets", []):
+        if str(ticket.get("status", "")).lower() == "solved":
+            continue
         ticket_id = ticket.get("id")
         if ticket_id is None:
             continue

@@ -3,9 +3,10 @@ from typing import Dict, Any, List, Optional
 import json
 import urllib.error
 import urllib.request
-import urllib.parse
 import base64
 import logging
+
+from zendesk_mcp_server.infrastructure.zendesk.tickets_repository import TicketsRepository
 
 logger = logging.getLogger("zendesk-mcp-client")
 _log_handlers = [logging.StreamHandler()]
@@ -24,7 +25,7 @@ logging.basicConfig(
 from zenpy import Zenpy
 from zenpy.lib.api_objects import Comment
 from zenpy.lib.api_objects import Ticket as ZenpyTicket
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 
 class ZendeskClient:
@@ -48,6 +49,12 @@ class ZendeskClient:
         credentials = f"{email}/token:{token}"
         encoded_credentials = base64.b64encode(credentials.encode()).decode('ascii')
         self.auth_header = f"Basic {encoded_credentials}"
+        self.tickets_repository = TicketsRepository(
+            base_url=self.base_url,
+            json_get=lambda url: self._json_get(url),
+            build_ticket_list_item=lambda ticket, now: self._build_ticket_list_item(ticket, now),
+            timestamp_formatter=lambda value: self._zendesk_ts(value),
+        )
 
     def _json_get(self, url: str, timeout: int = 30) -> Dict[str, Any]:
         req = urllib.request.Request(url)
@@ -283,7 +290,6 @@ class ZendeskClient:
         }
 
 
-    ## new version allowing to filter by org and agent
     def get_tickets(
         self,
         page: int = 1,
@@ -320,153 +326,22 @@ class ZendeskClient:
             Dict containing tickets and pagination info
         """
         try:
-            per_page = min(per_page, 100)
             now = datetime.now(timezone.utc)
-
-            # If any filters are present, use the Search API
-            # NEW UPDATED
-            if (
-                agent
-                or organization
-                or updated_since
-                or last_hours is not None
-                or created_last_hours is not None
-                or stale_hours is not None
-                or exclude_internal
-            ):
-                query_parts = ["type:ticket"]
-
-                if agent:
-                    agent_str = str(agent).strip()
-                    # If numeric, use assignee_id for deterministic filtering
-                    if agent_str.isdigit():
-                        query_parts.append(f"assignee_id:{agent_str}")
-                    else:
-                        query_parts.append(f'assignee:"{agent_str}"')
-
-                if organization:
-                    org_str = str(organization).strip()
-                    query_parts.append(f'organization:"{org_str}"')
-
-                # NEW: stale detector - show tickets NOT updated recently
-                # stale_hours=24  => updated < (now - 24h)
-                updated_before = None
-                if stale_hours is not None:
-                    dt = datetime.now(timezone.utc) - timedelta(hours=int(stale_hours))
-                    updated_before = self._zendesk_ts(dt)
-
-                # If using stale detection, default to open-ish tickets unless caller requests otherwise
-                # This keeps out solved/closed tickets
-                if stale_hours is not None and not include_solved:
-                    query_parts.append("status<solved")
-
-                if exclude_internal:
-                    query_parts.append("-tags:internal")
-
-                # Apply updated constraints
-                if last_hours is not None:
-                    dt = datetime.now(timezone.utc) - timedelta(hours=int(last_hours))
-                    updated_since = self._zendesk_ts(dt)
-
-                if created_last_hours is not None:
-                    dt = datetime.now(timezone.utc) - timedelta(hours=int(created_last_hours))
-                    query_parts.append(f"created>{self._zendesk_ts(dt)}")
-
-                if updated_before:
-                    query_parts.append(f"updated<{updated_before}")
-
-
-                if updated_since:
-                    # Zendesk Search supports updated>YYYY-MM-DD and updated>YYYY-MM-DDTHH:MM:SSZ
-                    since_str = str(updated_since).strip()
-                    query_parts.append(f"updated>{since_str}")
-
-
-
-                query = " ".join(query_parts)
-
-                params = {
-                    "query": query,
-                    "page": str(page),
-                    "per_page": str(per_page),
-                }
-
-                # NOTE: Some Zendesk instances reject sort params on search.
-                # If you get HTTP 400, remove these two lines.
-                params["sort_by"] = sort_by
-                params["sort_order"] = sort_order
-
-                url = f"{self.base_url}/search.json?{urllib.parse.urlencode(params)}"
-
-                req = urllib.request.Request(url)
-                req.add_header("Authorization", self.auth_header)
-                req.add_header("Content-Type", "application/json")
-                logger.info(f"Fetching Zendesk tickets from search API: {url}")
-                logger.info(f"Zendesk search query: {query if 'query' in locals() else 'tickets.json'}")
-                data = self._json_get(url)
-                logger.info(f"Fetched {len(data.get('results', []))} raw search results from Zendesk")
-
-                results = data.get("results", [])
-
-                ticket_list = []
-                for item in results:
-                    # Guard: only tickets
-                    if item.get("result_type") not in (None, "ticket"):
-                        continue
-
-                    ticket_list.append(self._build_ticket_list_item(item, now))
-
-                return {
-                    "tickets": ticket_list,
-                    "page": page,
-                    "per_page": per_page,
-                    "count": len(ticket_list),
-                    "sort_by": sort_by,
-                    "sort_order": sort_order,
-                    "filters": {
-                        "agent": agent,
-                        "organization": organization,
-                        "updated_since": updated_since,
-                        "last_hours": last_hours,
-                        "created_last_hours": created_last_hours,
-                        "stale_hours": stale_hours,
-                        "include_solved": include_solved,
-                        "exclude_internal": exclude_internal,
-                    },
-                    "has_more": data.get("next_page") is not None,
-                    "next_page": page + 1 if data.get("next_page") else None,
-                    "previous_page": page - 1 if page > 1 else None,
-                }
-
-            # No filters -> original /tickets.json behavior
-            params = {
-                "page": str(page),
-                "per_page": str(per_page),
-                "sort_by": sort_by,
-                "sort_order": sort_order,
-            }
-            url = f"{self.base_url}/tickets.json?{urllib.parse.urlencode(params)}"
-            logger.info(f"Fetching Zendesk tickets from list API: {url}")
-            data = self._json_get(url)
-            logger.info(f"Fetched {len(data.get('tickets', []))} raw tickets from Zendesk")
-
-            tickets_data = data.get("tickets", [])
-
-            ticket_list = []
-            for ticket in tickets_data:
-                ticket_list.append(self._build_ticket_list_item(ticket, now))
-
-            return {
-                "tickets": ticket_list,
-                "page": page,
-                "per_page": per_page,
-                "count": len(ticket_list),
-                "sort_by": sort_by,
-                "sort_order": sort_order,
-                "has_more": data.get("next_page") is not None,
-                "next_page": page + 1 if data.get("next_page") else None,
-                "previous_page": page - 1 if data.get("previous_page") and page > 1 else None,
-            }
+            return self.tickets_repository.get_tickets(
+                page=page,
+                per_page=per_page,
+                sort_by=sort_by,
+                sort_order=sort_order,
+                agent=agent,
+                organization=organization,
+                updated_since=updated_since,
+                last_hours=last_hours,
+                created_last_hours=created_last_hours,
+                stale_hours=stale_hours,
+                include_solved=include_solved,
+                exclude_internal=exclude_internal,
+                now=now,
+            )
 
         except urllib.error.HTTPError as e:
             error_body = e.read().decode() if e.fp else "No response body"
@@ -491,69 +366,14 @@ class ZendeskClient:
         try:
             if not agent or not str(agent).strip():
                 raise ValueError("agent is required")
-
-            per_page = max(1, min(per_page, 100))
-            max_results = max(1, min(max_results, 1000))
-
-            agent_str = str(agent).strip()
-            query_parts = ["type:ticket", "status:solved", f"solved>={solved_after}", f"solved<{solved_before}"]
-            if agent_str.isdigit():
-                query_parts.append(f"assignee_id:{agent_str}")
-            else:
-                query_parts.append(f'assignee:"{agent_str}"')
-
-            query = " ".join(query_parts)
-            params = {
-                "query": query,
-                "page": "1",
-                "per_page": str(per_page),
-                "sort_by": "created_at",
-                "sort_order": "desc",
-            }
-            url = f"{self.base_url}/search.json?{urllib.parse.urlencode(params)}"
-
-            collected: List[Dict[str, Any]] = []
-            total_matches: int | None = None
-            page = 1
-            excluded_api_created_count = 0
-
-            while url and len(collected) < max_results:
-                logger.info(f"Fetching solved-ticket search page {page}: {url}")
-                data = self._json_get(url)
-                if total_matches is None and isinstance(data.get("count"), int):
-                    total_matches = data["count"]
-
-                results = data.get("results", [])
-                for item in results:
-                    if item.get("result_type") not in (None, "ticket"):
-                        continue
-                    via_channel = ((item.get("via") or {}).get("channel"))
-                    if exclude_api_created and via_channel == "api":
-                        excluded_api_created_count += 1
-                        continue
-                    collected.append({
-                        "id": item.get("id"),
-                        "subject": item.get("subject"),
-                        "status": item.get("status"),
-                        "priority": item.get("priority"),
-                        "created_at": item.get("created_at"),
-                        "updated_at": item.get("updated_at"),
-                    })
-                    if len(collected) >= max_results:
-                        break
-
-                url = data.get("next_page")
-                page += 1
-
-            retrieved_count = len(collected)
-            return {
-                "tickets": collected,
-                "query": query,
-                "total_matches": total_matches if total_matches is not None else retrieved_count,
-                "retrieved_count": retrieved_count,
-                "truncated": bool(url),
-                "excluded_api_created_count": excluded_api_created_count,
-            }
+            return self.tickets_repository.search_solved_tickets_for_agent(
+                agent=agent,
+                solved_after=solved_after,
+                solved_before=solved_before,
+                max_results=max_results,
+                per_page=per_page,
+                exclude_api_created=exclude_api_created,
+            )
         except urllib.error.HTTPError as e:
             error_body = e.read().decode() if e.fp else "No response body"
             raise Exception(
@@ -586,81 +406,22 @@ class ZendeskClient:
             phrase_str = str(phrase).strip()
             if not phrase_str:
                 raise ValueError("phrase is required")
-
-            per_page = max(1, min(per_page, 100))
             now = datetime.now(timezone.utc)
-
-            escaped_phrase = phrase_str.replace('"', '\\"')
-            query_parts = ["type:ticket", f'"{escaped_phrase}"']
-
-            if organization:
-                org_str = str(organization).strip()
-                if org_str:
-                    query_parts.append(f'organization:"{org_str}"')
-
-            if updated_since:
-                query_parts.append(f"updated>{str(updated_since).strip()}")
-
-            if updated_before:
-                query_parts.append(f"updated<{str(updated_before).strip()}")
-
-            if status:
-                query_parts.append(f"status:{str(status).strip()}")
-            elif not include_solved:
-                query_parts.append("status<solved")
-
-            if exclude_internal:
-                query_parts.append("-tags:internal")
-
-            if comment_author:
-                commenter = str(comment_author).strip()
-                if commenter.isdigit():
-                    query_parts.append(f"commenter:{commenter}")
-                elif commenter:
-                    query_parts.append(f'commenter:"{commenter}"')
-
-            query = " ".join(query_parts)
-            params = {
-                "query": query,
-                "page": str(page),
-                "per_page": str(per_page),
-                "sort_by": sort_by,
-                "sort_order": sort_order,
-            }
-            url = f"{self.base_url}/search.json?{urllib.parse.urlencode(params)}"
-
-            logger.info(f"Searching tickets by text via search API: {url}")
-            data = self._json_get(url)
-
-            results = data.get("results", [])
-            ticket_list = []
-            for item in results:
-                if item.get("result_type") not in (None, "ticket"):
-                    continue
-                ticket_list.append(self._build_ticket_list_item(item, now))
-
-            return {
-                "tickets": ticket_list,
-                "page": page,
-                "per_page": per_page,
-                "count": len(ticket_list),
-                "sort_by": sort_by,
-                "sort_order": sort_order,
-                "query": query,
-                "filters": {
-                    "phrase": phrase_str,
-                    "organization": organization,
-                    "updated_since": updated_since,
-                    "updated_before": updated_before,
-                    "status": status,
-                    "include_solved": include_solved,
-                    "exclude_internal": exclude_internal,
-                    "comment_author": comment_author,
-                },
-                "has_more": data.get("next_page") is not None,
-                "next_page": page + 1 if data.get("next_page") else None,
-                "previous_page": page - 1 if page > 1 else None,
-            }
+            return self.tickets_repository.search_tickets_by_text(
+                phrase=phrase_str,
+                page=page,
+                per_page=per_page,
+                sort_by=sort_by,
+                sort_order=sort_order,
+                organization=organization,
+                updated_since=updated_since,
+                updated_before=updated_before,
+                status=status,
+                include_solved=include_solved,
+                exclude_internal=exclude_internal,
+                comment_author=comment_author,
+                now=now,
+            )
         except urllib.error.HTTPError as e:
             error_body = e.read().decode() if e.fp else "No response body"
             raise Exception(f"Failed to search tickets by text: HTTP {e.code} - {e.reason}. {error_body}")
