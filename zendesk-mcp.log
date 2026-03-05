@@ -720,3 +720,18 @@
 2026-03-05 13:59:19,455 - INFO - Fetched Zendesk ticket 42484 successfully
 2026-03-05 13:59:19,458 - INFO - Fetching Zendesk comments for ticket 42484
 2026-03-05 13:59:20,293 - INFO - Fetched 34 Zendesk comments for ticket 42484
+2026-03-05 14:21:34,824 - INFO - zendesk mcp server started
+2026-03-05 14:21:34,829 - INFO - Fetching Zendesk ticket field definitions
+2026-03-05 14:21:35,508 - INFO - Fetched Zendesk ticket field definitions successfully
+2026-03-05 14:21:35,508 - INFO - Fetching Zendesk ticket field options for field 25497966
+2026-03-05 14:21:36,023 - INFO - Fetched Zendesk ticket field options for field 25497966 successfully
+2026-03-05 14:21:36,024 - INFO - Fetching Zendesk ticket field options for field 360038406752
+2026-03-05 14:21:36,533 - INFO - Fetched Zendesk ticket field options for field 360038406752 successfully
+2026-03-05 14:21:36,533 - INFO - Fetching Zendesk ticket field options for field 4415622115985
+2026-03-05 14:21:37,042 - INFO - Fetched Zendesk ticket field options for field 4415622115985 successfully
+2026-03-05 14:21:37,043 - INFO - Fetching Zendesk ticket field options for field 11068759378973
+2026-03-05 14:21:37,603 - INFO - Fetched Zendesk ticket field options for field 11068759378973 successfully
+2026-03-05 14:21:37,605 - INFO - Loaded ticket field option maps for 4 relevant fields
+2026-03-05 14:21:37,670 - INFO - Processing request of type ListToolsRequest
+2026-03-05 14:21:37,672 - INFO - Processing request of type ListPromptsRequest
+2026-03-05 14:21:37,673 - INFO - Processing request of type ListResourcesRequest

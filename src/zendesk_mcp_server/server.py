@@ -221,6 +221,7 @@ class TicketFilters(BaseModel):
     organization: str | None = None
     updated_since: str | None = None
     last_hours: int | None = None
+    created_last_hours: int | None = None
     stale_hours: int | None = None
     include_solved: bool = False
     exclude_internal: bool = False
@@ -292,6 +293,239 @@ class RandomTicketReviewResult(BaseModel):
     solved_before: str
     seed: int | None = None
     review_input: str
+
+
+class TicketTroubleFlag(BaseModel):
+    code: str
+    severity: str
+    message: str
+
+
+class TicketTroubleAssessment(BaseModel):
+    ticket_id: int
+    subject: str | None = None
+    status: str | None = None
+    priority: str | None = None
+    in_trouble: bool
+    risk_score: int
+    flags: list[TicketTroubleFlag]
+
+
+class ScanTicketsInTroubleResult(BaseModel):
+    created_last_hours: int
+    scanned_count: int
+    in_trouble_count: int
+    tickets: list[TicketTroubleAssessment]
+
+
+def _parse_iso_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _contains_any(text: str | None, terms: list[str]) -> bool:
+    if not text:
+        return False
+    lowered = text.lower()
+    return any(term in lowered for term in terms)
+
+
+def _is_title_structured(subject: str | None) -> bool:
+    if not subject:
+        return False
+    segments = [segment.strip() for segment in subject.split("|")]
+    segments = [segment for segment in segments if segment]
+    return len(segments) >= 3
+
+
+def _build_ticket_trouble_assessment(
+    ticket: dict[str, Any],
+    comments: list[dict[str, Any]],
+    initial_response_sla_minutes: int,
+    high_priority_stale_hours: int,
+) -> TicketTroubleAssessment:
+    flags: list[TicketTroubleFlag] = []
+
+    ticket_id = int(ticket.get("id"))
+    subject = ticket.get("subject")
+    status = ticket.get("status")
+    priority = ticket.get("priority")
+    requester_id = ticket.get("requester_id")
+    tags = set(ticket.get("tags") or [])
+    created_at = _parse_iso_datetime(ticket.get("created_at"))
+    updated_at = _parse_iso_datetime(ticket.get("updated_at"))
+    custom_fields = ticket.get("custom_fields") if isinstance(ticket.get("custom_fields"), dict) else {}
+
+    public_comments = [c for c in comments if c.get("public")]
+    public_comments_sorted = sorted(
+        public_comments,
+        key=lambda c: _parse_iso_datetime(c.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc),
+    )
+
+    if not _is_title_structured(subject):
+        flags.append(
+            TicketTroubleFlag(
+                code="title_incorrect",
+                severity="medium",
+                message="Ticket title is missing expected structured segments (Customer | Context | Issue).",
+            )
+        )
+
+    required_status_fields = ["Status With", "Support Stage", "Release Stage"]
+    missing_status_fields = [field for field in required_status_fields if not custom_fields.get(field)]
+    if missing_status_fields:
+        flags.append(
+            TicketTroubleFlag(
+                code="status_fields_incomplete",
+                severity="high",
+                message=f"Required status fields missing/empty: {', '.join(missing_status_fields)}.",
+            )
+        )
+
+    first_public_agent_response_at: datetime | None = None
+    for comment in public_comments_sorted:
+        author_id = comment.get("author_id")
+        if requester_id is not None and author_id == requester_id:
+            continue
+        first_public_agent_response_at = _parse_iso_datetime(comment.get("created_at"))
+        if first_public_agent_response_at is not None:
+            break
+
+    if created_at is not None and first_public_agent_response_at is None:
+        flags.append(
+            TicketTroubleFlag(
+                code="missing_initial_response",
+                severity="high",
+                message="No public agent response found.",
+            )
+        )
+    elif created_at is not None and first_public_agent_response_at is not None:
+        response_minutes = int((first_public_agent_response_at - created_at).total_seconds() // 60)
+        if response_minutes > initial_response_sla_minutes:
+            flags.append(
+                TicketTroubleFlag(
+                    code="late_initial_response",
+                    severity="high",
+                    message=f"Initial public response took {response_minutes}m (SLA {initial_response_sla_minutes}m).",
+                )
+            )
+
+    customer_public_comments = [
+        c for c in public_comments_sorted if requester_id is not None and c.get("author_id") == requester_id
+    ]
+    for customer_comment in customer_public_comments:
+        customer_time = _parse_iso_datetime(customer_comment.get("created_at"))
+        has_follow_up = False
+        for possible_reply in public_comments_sorted:
+            reply_time = _parse_iso_datetime(possible_reply.get("created_at"))
+            if customer_time is None or reply_time is None:
+                continue
+            if reply_time <= customer_time:
+                continue
+            if requester_id is not None and possible_reply.get("author_id") == requester_id:
+                continue
+            has_follow_up = True
+            break
+        if not has_follow_up:
+            flags.append(
+                TicketTroubleFlag(
+                    code="customer_comment_no_response",
+                    severity="high",
+                    message="Customer left a public comment without a later public agent response.",
+                )
+            )
+            break
+
+    confirmation_terms = ["resolved", "works", "working", "fixed", "thank", "confirmed", "solved"]
+    has_customer_confirmation = any(
+        _contains_any(c.get("body"), confirmation_terms) or _contains_any(c.get("html_body"), confirmation_terms)
+        for c in customer_public_comments
+    )
+    if status in {"solved", "closed"} and not has_customer_confirmation:
+        flags.append(
+            TicketTroubleFlag(
+                code="solved_without_customer_confirmation",
+                severity="high",
+                message="Ticket is solved/closed without explicit customer confirmation in public comments.",
+            )
+        )
+
+    if priority in {"high", "urgent"}:
+        stale_hours = ticket.get("stale_age_hours")
+        if stale_hours is None and updated_at is not None:
+            stale_hours = int(max((datetime.now(timezone.utc) - updated_at).total_seconds(), 0) // 3600)
+        if stale_hours is not None and int(stale_hours) > high_priority_stale_hours:
+            flags.append(
+                TicketTroubleFlag(
+                    code="high_priority_no_recent_updates",
+                    severity="high",
+                    message=(
+                        f"High-priority ticket has no recent update for {int(stale_hours)}h "
+                        f"(threshold {high_priority_stale_hours}h)."
+                    ),
+                )
+            )
+
+    if "crash_detected" in tags:
+        evidence_extensions = (".ips", ".crash", ".log", ".txt", ".dmp")
+        evidence_terms = ["stacktrace", "stack trace", "backtrace", "crash log", "exception"]
+        request_terms = ["send stacktrace", "share stacktrace", "provide stacktrace", "crash log", "stack trace"]
+
+        has_stacktrace_evidence = False
+        first_stacktrace_request_at: datetime | None = None
+
+        for comment in public_comments_sorted:
+            body = comment.get("body")
+            html_body = comment.get("html_body")
+            attachments = comment.get("attachments") or []
+
+            if _contains_any(body, evidence_terms) or _contains_any(html_body, evidence_terms):
+                has_stacktrace_evidence = True
+
+            for attachment in attachments:
+                file_name = str(attachment.get("file_name") or "").lower()
+                if file_name.endswith(evidence_extensions):
+                    has_stacktrace_evidence = True
+                    break
+
+            if first_stacktrace_request_at is None and _contains_any(body, request_terms):
+                first_stacktrace_request_at = _parse_iso_datetime(comment.get("created_at"))
+
+        if not has_stacktrace_evidence and first_stacktrace_request_at is None:
+            flags.append(
+                TicketTroubleFlag(
+                    code="crash_process_gap",
+                    severity="high",
+                    message="Crash ticket has no stacktrace evidence and no explicit request for crash logs.",
+                )
+            )
+        elif created_at is not None and first_stacktrace_request_at is not None:
+            request_delay_minutes = int((first_stacktrace_request_at - created_at).total_seconds() // 60)
+            if request_delay_minutes > 60 and not has_stacktrace_evidence:
+                flags.append(
+                    TicketTroubleFlag(
+                        code="late_stacktrace_request",
+                        severity="medium",
+                        message=f"Stacktrace request was sent after {request_delay_minutes}m (>60m).",
+                    )
+                )
+
+    risk_weight = {"high": 30, "medium": 15, "low": 5}
+    risk_score = min(100, sum(risk_weight.get(flag.severity, 5) for flag in flags))
+
+    return TicketTroubleAssessment(
+        ticket_id=ticket_id,
+        subject=subject,
+        status=status,
+        priority=priority,
+        in_trouble=bool(flags),
+        risk_score=risk_score,
+        flags=flags,
+    )
 
 
 @mcp.prompt(name="analyze-ticket", description="Analyze a Zendesk ticket and provide insights")
@@ -422,6 +656,10 @@ def get_tickets(
         int | None,
         Field(description="Relative filter. Example: 5 = updated in last 5 hours."),
     ] = None,
+    created_last_hours: Annotated[
+        int | None,
+        Field(description="Relative filter. Example: 4 = created in last 4 hours."),
+    ] = None,
     stale_hours: Annotated[
         int | None,
         Field(description="Stale detector. Example: 24 = not updated in the last 24 hours."),
@@ -444,11 +682,72 @@ def get_tickets(
         organization=organization,
         updated_since=updated_since,
         last_hours=last_hours,
+        created_last_hours=created_last_hours,
         stale_hours=stale_hours,
         include_solved=include_solved,
         exclude_internal=exclude_internal,
     )
     return GetTicketsResult.model_validate(tickets)
+
+
+@mcp.tool(
+    name="scan_tickets_in_trouble",
+    description="Scan recently created tickets and flag tickets likely in trouble based on QA process checks",
+    structured_output=True,
+)
+def scan_tickets_in_trouble(
+    created_last_hours: Annotated[
+        int,
+        Field(description="Scan tickets created in the last N hours."),
+    ] = 4,
+    per_page: Annotated[
+        int,
+        Field(description="How many tickets to inspect from the created window (max 100)."),
+    ] = 50,
+    exclude_internal: Annotated[
+        bool,
+        Field(description="Exclude tickets tagged internal from scan results."),
+    ] = True,
+    initial_response_sla_minutes: Annotated[
+        int,
+        Field(description="SLA threshold for first public agent response in minutes."),
+    ] = 60,
+    high_priority_stale_hours: Annotated[
+        int,
+        Field(description="Threshold for stale high-priority tickets in hours."),
+    ] = 8,
+) -> ScanTicketsInTroubleResult:
+    list_result = zendesk_client.get_tickets(
+        page=1,
+        per_page=min(per_page, 100),
+        sort_by="created_at",
+        sort_order="desc",
+        created_last_hours=created_last_hours,
+        exclude_internal=exclude_internal,
+    )
+
+    assessments: list[TicketTroubleAssessment] = []
+    for ticket in list_result.get("tickets", []):
+        ticket_id = ticket.get("id")
+        if ticket_id is None:
+            continue
+        full_ticket = _prepare_ticket_payload(int(ticket_id))
+        comments = zendesk_client.get_ticket_comments(int(ticket_id))
+        assessment = _build_ticket_trouble_assessment(
+            ticket=full_ticket,
+            comments=comments,
+            initial_response_sla_minutes=initial_response_sla_minutes,
+            high_priority_stale_hours=high_priority_stale_hours,
+        )
+        assessments.append(assessment)
+
+    in_trouble_count = len([ticket for ticket in assessments if ticket.in_trouble])
+    return ScanTicketsInTroubleResult(
+        created_last_hours=created_last_hours,
+        scanned_count=len(assessments),
+        in_trouble_count=in_trouble_count,
+        tickets=assessments,
+    )
 
 
 @mcp.tool(

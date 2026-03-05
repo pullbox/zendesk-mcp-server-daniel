@@ -139,6 +139,7 @@ Fetch ticket list with pagination and optional filters.
   - `organization` (string, optional): Organization name filter
   - `updated_since` (string, optional): ISO date/datetime filter
   - `last_hours` (integer, optional): Relative filter. Example: `5` means tickets updated in the last 5 hours
+  - `created_last_hours` (integer, optional): Relative filter. Example: `4` means tickets created in the last 4 hours
   - `stale_hours` (integer, optional): Relative stale filter. Example: `24` means tickets not updated in the last 24 hours
   - `include_solved` (boolean, optional): Include solved/closed tickets when using `stale_hours`
   - `exclude_internal` (boolean, optional): Exclude tickets tagged `internal` from results
@@ -165,6 +166,26 @@ Search ticket content by phrase, with optional narrowing.
 
 - Output:
   - Structured result with tickets, built search query string, filters, and pagination fields.
+
+### scan_tickets_in_trouble
+
+Scan tickets created in the last N hours and flag likely QA/process issues.
+
+- Input:
+  - `created_last_hours` (default `4`)
+  - `per_page` (default `50`, max `100`)
+  - `exclude_internal` (default `true`)
+  - `initial_response_sla_minutes` (default `60`)
+  - `high_priority_stale_hours` (default `8`)
+
+- Checks include:
+  - title format
+  - crash-ticket process gaps
+  - required status/custom-field completeness
+  - late or missing initial response
+  - customer public comment without follow-up
+  - solved/closed without customer confirmation
+  - high-priority tickets with stale updates
 
 ### sample_solved_tickets_for_agent
 

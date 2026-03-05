@@ -92,6 +92,43 @@ class TestGetTicketsLastFiveHours(unittest.TestCase):
             },
         )
 
+    def test_get_tickets_created_last_hours_uses_created_query(self) -> None:
+        fixed_now = datetime(2026, 3, 2, 15, 30, 0, tzinfo=timezone.utc)
+        api_payload = {
+            "results": [
+                {
+                    "result_type": "ticket",
+                    "id": 901,
+                    "subject": "Recent ticket",
+                    "status": "open",
+                    "priority": "normal",
+                    "created_at": "2026-03-02T14:30:00Z",
+                    "updated_at": "2026-03-02T14:45:00Z",
+                }
+            ],
+            "next_page": None,
+        }
+
+        mock_response = MagicMock()
+        mock_response.read.return_value = json.dumps(api_payload).encode("utf-8")
+        mock_urlopen = MagicMock()
+        mock_urlopen.return_value.__enter__.return_value = mock_response
+
+        with (
+            patch("zendesk_mcp_server.zendesk_client.datetime") as mock_datetime,
+            patch("zendesk_mcp_server.zendesk_client.urllib.request.urlopen", mock_urlopen),
+        ):
+            mock_datetime.now.return_value = fixed_now
+            self.client.get_tickets(created_last_hours=4, per_page=25)
+
+        request = mock_urlopen.call_args.args[0]
+        parsed_url = urlparse(request.full_url)
+        params = parse_qs(parsed_url.query)
+        query = unquote(params["query"][0])
+
+        self.assertIn("type:ticket", query)
+        self.assertIn("created>2026-03-02T11:30:00+00:00", query)
+
     def test_get_ticket_includes_tags(self) -> None:
         with (
             patch.object(self.client, "_resolve_custom_fields", return_value={}),
@@ -432,12 +469,112 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
             organization=None,
             updated_since=None,
             last_hours=5,
+            created_last_hours=None,
             stale_hours=None,
             include_solved=False,
             exclude_internal=False,
         )
         self.assertEqual(response.root.structuredContent, expected_payload)
         self.assertEqual(json.loads(response.root.content[0].text), expected_payload)
+        self.assertFalse(response.root.isError)
+
+    def test_scan_tickets_in_trouble_flags_requested_conditions(self) -> None:
+        list_payload = {
+            "tickets": [
+                {
+                    "id": 777,
+                    "subject": "ACME | iOS | Crash after login",
+                    "status": "solved",
+                    "priority": "high",
+                    "created_at": "2026-03-05T10:00:00Z",
+                    "updated_at": "2026-03-05T19:30:00Z",
+                    "stale_age_hours": 9,
+                    "stale_age_days": 0,
+                }
+            ],
+            "count": 1,
+            "page": 1,
+            "per_page": 25,
+            "sort_by": "created_at",
+            "sort_order": "desc",
+            "filters": {
+                "created_last_hours": 4,
+                "exclude_internal": True,
+            },
+            "has_more": False,
+            "next_page": None,
+            "previous_page": None,
+        }
+        full_ticket_payload = {
+            "id": 777,
+            "subject": "ACME | iOS | Crash after login",
+            "status": "solved",
+            "priority": "high",
+            "created_at": "2026-03-05T10:00:00Z",
+            "updated_at": "2026-03-05T19:30:00Z",
+            "requester_id": 1001,
+            "tags": ["crash_detected"],
+            "custom_fields": {
+                "Status With": "customer",
+                "Support Stage": "investigation",
+            },
+            "stale_age_hours": 9,
+        }
+        comments_payload = [
+            {
+                "author_id": 1001,
+                "public": True,
+                "body": "Any update?",
+                "html_body": "<p>Any update?</p>",
+                "created_at": "2026-03-05T11:00:00Z",
+                "attachments": [],
+            },
+            {
+                "author_id": 2002,
+                "public": True,
+                "body": "We are checking internally.",
+                "html_body": "<p>We are checking internally.</p>",
+                "created_at": "2026-03-05T11:10:00Z",
+                "attachments": [],
+            },
+            {
+                "author_id": 1001,
+                "public": True,
+                "body": "Still broken",
+                "html_body": "<p>Still broken</p>",
+                "created_at": "2026-03-05T12:00:00Z",
+                "attachments": [],
+            },
+        ]
+
+        request = CallToolRequest(
+            method="tools/call",
+            params=CallToolRequestParams(
+                name="scan_tickets_in_trouble",
+                arguments={"created_last_hours": 4, "per_page": 25},
+            ),
+        )
+
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        with (
+            patch.object(server_module, "zendesk_client") as mock_client,
+            patch.object(server_module, "_prepare_ticket_payload", return_value=full_ticket_payload),
+        ):
+            mock_client.get_tickets.return_value = list_payload
+            mock_client.get_ticket_comments.return_value = comments_payload
+
+            handler = server_module.mcp._mcp_server.request_handlers[CallToolRequest]
+            response = asyncio.run(handler(request))
+
+        structured = response.root.structuredContent
+        self.assertEqual(structured["scanned_count"], 1)
+        self.assertEqual(structured["in_trouble_count"], 1)
+        flag_codes = [flag["code"] for flag in structured["tickets"][0]["flags"]]
+        self.assertIn("customer_comment_no_response", flag_codes)
+        self.assertIn("solved_without_customer_confirmation", flag_codes)
+        self.assertIn("high_priority_no_recent_updates", flag_codes)
         self.assertFalse(response.root.isError)
 
     def test_sample_solved_tickets_for_agent_is_deterministic_with_seed(self) -> None:

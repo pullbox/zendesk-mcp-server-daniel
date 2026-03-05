@@ -289,6 +289,7 @@ class ZendeskClient:
         organization: Optional[str] = None,
         updated_since: Optional[str] = None,
         last_hours: Optional[int] = None, # NEW
+        created_last_hours: Optional[int] = None,
         stale_hours: Optional[int] = None, # NEW
         include_solved: bool = False, # NEW
         exclude_internal: bool = False,
@@ -324,6 +325,7 @@ class ZendeskClient:
                 or organization
                 or updated_since
                 or last_hours is not None
+                or created_last_hours is not None
                 or stale_hours is not None
                 or exclude_internal
             ):
@@ -360,6 +362,10 @@ class ZendeskClient:
                 if last_hours is not None:
                     dt = datetime.now(timezone.utc) - timedelta(hours=int(last_hours))
                     updated_since = self._zendesk_ts(dt)
+
+                if created_last_hours is not None:
+                    dt = datetime.now(timezone.utc) - timedelta(hours=int(created_last_hours))
+                    query_parts.append(f"created>{self._zendesk_ts(dt)}")
 
                 if updated_before:
                     query_parts.append(f"updated<{updated_before}")
@@ -417,6 +423,7 @@ class ZendeskClient:
                         "organization": organization,
                         "updated_since": updated_since,
                         "last_hours": last_hours,
+                        "created_last_hours": created_last_hours,
                         "stale_hours": stale_hours,
                         "include_solved": include_solved,
                         "exclude_internal": exclude_internal,
