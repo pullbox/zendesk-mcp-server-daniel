@@ -15,6 +15,7 @@ from zendesk_mcp_server.infrastructure.zendesk.ticket_mapper import (
     build_ticket_list_item,
     format_zendesk_timestamp,
 )
+from zendesk_mcp_server.infrastructure.zendesk.field_value_mapper import FieldValueMapper
 
 logger = logging.getLogger("zendesk-mcp-client")
 _log_handlers = [logging.StreamHandler()]
@@ -66,6 +67,7 @@ class ZendeskClient:
             base_url=self.base_url,
             json_get=lambda url: self._json_get(url),
         )
+        self.field_value_mapper = FieldValueMapper(get_ticket_fields=lambda: self.get_ticket_fields())
         self.comments_repository = CommentsRepository(
             base_url=self.base_url,
             json_get=lambda url: self._json_get(url),
@@ -118,34 +120,12 @@ class ZendeskClient:
             logger.error(f"Failed to get Zendesk ticket field options for field {ticket_field_id}: {e}")
             raise Exception(f"Failed to get ticket field options for field {ticket_field_id}: {str(e)}")
 
-    def _get_field_map(self) -> Dict[int, str]:
-        """
-        Return a cached id->title mapping for all ticket fields.
-        Re-fetches on each ZendeskClient instance (not across restarts).
-        Falls back to an empty map if the ticket_fields API is unavailable.
-        """
-        if not hasattr(self, "_field_map_cache"):
-            try:
-                fields = self.get_ticket_fields()
-                self._field_map_cache = {f["id"]: f["title"] for f in fields}
-            except Exception as e:
-                logger.warning(f"Could not load ticket field map (custom fields will show IDs): {e}")
-                self._field_map_cache = {}
-        return self._field_map_cache
-
     def _resolve_custom_fields(self, raw: list) -> Dict[str, Any]:
         """
         Convert a raw custom_fields list [{id, value}, ...] from the REST API
         into a {field_title: value} dict, omitting null values.
         """
-        if not raw:
-            return {}
-        field_map = self._get_field_map()
-        return {
-            field_map.get(cf["id"], str(cf["id"])): cf["value"]
-            for cf in raw
-            if cf.get("value") is not None
-        }
+        return self.field_value_mapper.resolve_custom_fields(raw)
 
     def get_ticket(self, ticket_id: int) -> Dict[str, Any]:
         """
