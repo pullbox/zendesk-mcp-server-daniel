@@ -1,3 +1,4 @@
+import datetime as dtlib
 from typing import Dict, Any, List, Optional
 import json
 import urllib.error
@@ -154,6 +155,7 @@ class ZendeskClient:
                 'requester_id': ticket.get('requester_id'),
                 'assignee_id': ticket.get('assignee_id'),
                 'organization_id': ticket.get('organization_id'),
+                'tags': ticket.get('tags', []),
                 'custom_fields': custom_fields,
             }
             logger.info(f"Fetched Zendesk ticket {ticket_id} successfully")
@@ -181,13 +183,25 @@ class ZendeskClient:
             while url:
                 data = self._json_get(url)
                 for comment in data.get("comments", []):
+                    attachments = []
+                    for attachment in comment.get("attachments", []) or []:
+                        attachments.append(
+                            {
+                                "id": attachment.get("id"),
+                                "file_name": attachment.get("file_name"),
+                                "content_type": attachment.get("content_type"),
+                                "size": attachment.get("size"),
+                                "inline": attachment.get("inline"),
+                            }
+                        )
                     comments.append({
                         'id': comment.get('id'),
                         'author_id': comment.get('author_id'),
                         'body': comment.get('body'),
                         'html_body': comment.get('html_body'),
                         'public': comment.get('public'),
-                        'created_at': comment.get('created_at')
+                        'created_at': comment.get('created_at'),
+                        'attachments': attachments,
                     })
                 url = data.get("next_page")
 
@@ -231,6 +245,38 @@ class ZendeskClient:
         dt = dt.replace(microsecond=0)
         return dt.isoformat()  # e.g. 2026-02-27T22:32:42+00:00
 
+    def _parse_zendesk_datetime(self, value: Optional[str]) -> Optional[dtlib.datetime]:
+        if not value:
+            return None
+
+        try:
+            return dtlib.datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            logger.warning("Could not parse Zendesk timestamp: %s", value)
+            return None
+
+    def _build_ticket_list_item(self, ticket: Dict[str, Any], now: datetime) -> Dict[str, Any]:
+        updated_at = ticket.get("updated_at")
+        updated_dt = self._parse_zendesk_datetime(updated_at)
+        stale_age_hours = None
+        stale_age_days = None
+
+        if updated_dt is not None:
+            age_seconds = max((now - updated_dt).total_seconds(), 0)
+            stale_age_hours = int(age_seconds // 3600)
+            stale_age_days = int(age_seconds // 86400)
+
+        return {
+            "id": ticket.get("id"),
+            "subject": ticket.get("subject"),
+            "status": ticket.get("status"),
+            "priority": ticket.get("priority"),
+            "created_at": ticket.get("created_at"),
+            "updated_at": updated_at,
+            "stale_age_hours": stale_age_hours,
+            "stale_age_days": stale_age_days,
+        }
+
 
     ## new version allowing to filter by org and agent
     def get_tickets(
@@ -245,6 +291,7 @@ class ZendeskClient:
         last_hours: Optional[int] = None, # NEW
         stale_hours: Optional[int] = None, # NEW
         include_solved: bool = False, # NEW
+        exclude_internal: bool = False,
     ) -> Dict[str, Any]:
         """
         Get tickets with optional filtering.
@@ -268,10 +315,18 @@ class ZendeskClient:
         """
         try:
             per_page = min(per_page, 100)
+            now = datetime.now(timezone.utc)
 
             # If any filters are present, use the Search API
             # NEW UPDATED
-            if agent or organization or updated_since or last_hours is not None or stale_hours is not None:
+            if (
+                agent
+                or organization
+                or updated_since
+                or last_hours is not None
+                or stale_hours is not None
+                or exclude_internal
+            ):
                 query_parts = ["type:ticket"]
 
                 if agent:
@@ -297,6 +352,9 @@ class ZendeskClient:
                 # This keeps out solved/closed tickets
                 if stale_hours is not None and not include_solved:
                     query_parts.append("status<solved")
+
+                if exclude_internal:
+                    query_parts.append("-tags:internal")
 
                 # Apply updated constraints
                 if last_hours is not None:
@@ -345,14 +403,7 @@ class ZendeskClient:
                     if item.get("result_type") not in (None, "ticket"):
                         continue
 
-                    ticket_list.append({
-                        "id": item.get("id"),
-                        "subject": item.get("subject"),
-                        "status": item.get("status"),
-                        "priority": item.get("priority"),
-                        "created_at": item.get("created_at"),
-                        "updated_at": item.get("updated_at"),
-                    })
+                    ticket_list.append(self._build_ticket_list_item(item, now))
 
                 return {
                     "tickets": ticket_list,
@@ -368,6 +419,7 @@ class ZendeskClient:
                         "last_hours": last_hours,
                         "stale_hours": stale_hours,
                         "include_solved": include_solved,
+                        "exclude_internal": exclude_internal,
                     },
                     "has_more": data.get("next_page") is not None,
                     "next_page": page + 1 if data.get("next_page") else None,
@@ -390,14 +442,7 @@ class ZendeskClient:
 
             ticket_list = []
             for ticket in tickets_data:
-                ticket_list.append({
-                    "id": ticket.get("id"),
-                    "subject": ticket.get("subject"),
-                    "status": ticket.get("status"),
-                    "priority": ticket.get("priority"),
-                    "created_at": ticket.get("created_at"),
-                    "updated_at": ticket.get("updated_at"),
-                })
+                ticket_list.append(self._build_ticket_list_item(ticket, now))
 
             return {
                 "tickets": ticket_list,
@@ -416,6 +461,199 @@ class ZendeskClient:
             raise Exception(f"Failed to get tickets: HTTP {e.code} - {e.reason}. {error_body}")
         except Exception as e:
             raise Exception(f"Failed to get tickets: {str(e)}")
+
+    def search_solved_tickets_for_agent(
+        self,
+        agent: str,
+        solved_after: str,
+        solved_before: str,
+        max_results: int = 250,
+        per_page: int = 100,
+        exclude_api_created: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Search solved tickets for a specific agent in a solved date window.
+
+        Uses the Search API with offset pagination and returns a lightweight ticket list.
+        """
+        try:
+            if not agent or not str(agent).strip():
+                raise ValueError("agent is required")
+
+            per_page = max(1, min(per_page, 100))
+            max_results = max(1, min(max_results, 1000))
+
+            agent_str = str(agent).strip()
+            query_parts = ["type:ticket", "status:solved", f"solved>={solved_after}", f"solved<{solved_before}"]
+            if agent_str.isdigit():
+                query_parts.append(f"assignee_id:{agent_str}")
+            else:
+                query_parts.append(f'assignee:"{agent_str}"')
+
+            query = " ".join(query_parts)
+            params = {
+                "query": query,
+                "page": "1",
+                "per_page": str(per_page),
+                "sort_by": "created_at",
+                "sort_order": "desc",
+            }
+            url = f"{self.base_url}/search.json?{urllib.parse.urlencode(params)}"
+
+            collected: List[Dict[str, Any]] = []
+            total_matches: int | None = None
+            page = 1
+            excluded_api_created_count = 0
+
+            while url and len(collected) < max_results:
+                logger.info(f"Fetching solved-ticket search page {page}: {url}")
+                data = self._json_get(url)
+                if total_matches is None and isinstance(data.get("count"), int):
+                    total_matches = data["count"]
+
+                results = data.get("results", [])
+                for item in results:
+                    if item.get("result_type") not in (None, "ticket"):
+                        continue
+                    via_channel = ((item.get("via") or {}).get("channel"))
+                    if exclude_api_created and via_channel == "api":
+                        excluded_api_created_count += 1
+                        continue
+                    collected.append({
+                        "id": item.get("id"),
+                        "subject": item.get("subject"),
+                        "status": item.get("status"),
+                        "priority": item.get("priority"),
+                        "created_at": item.get("created_at"),
+                        "updated_at": item.get("updated_at"),
+                    })
+                    if len(collected) >= max_results:
+                        break
+
+                url = data.get("next_page")
+                page += 1
+
+            retrieved_count = len(collected)
+            return {
+                "tickets": collected,
+                "query": query,
+                "total_matches": total_matches if total_matches is not None else retrieved_count,
+                "retrieved_count": retrieved_count,
+                "truncated": bool(url),
+                "excluded_api_created_count": excluded_api_created_count,
+            }
+        except urllib.error.HTTPError as e:
+            error_body = e.read().decode() if e.fp else "No response body"
+            raise Exception(
+                f"Failed to search solved tickets for agent {agent}: HTTP {e.code} - {e.reason}. {error_body}"
+            )
+        except Exception as e:
+            raise Exception(f"Failed to search solved tickets for agent {agent}: {str(e)}")
+
+    def search_tickets_by_text(
+        self,
+        phrase: str,
+        page: int = 1,
+        per_page: int = 25,
+        sort_by: str = "updated_at",
+        sort_order: str = "desc",
+        organization: Optional[str] = None,
+        updated_since: Optional[str] = None,
+        updated_before: Optional[str] = None,
+        status: Optional[str] = None,
+        include_solved: bool = False,
+        exclude_internal: bool = False,
+        comment_author: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Search tickets by free-text phrase across Zendesk indexed ticket content.
+
+        Supports optional organization, timeframe, status, and comment-author narrowing.
+        """
+        try:
+            phrase_str = str(phrase).strip()
+            if not phrase_str:
+                raise ValueError("phrase is required")
+
+            per_page = max(1, min(per_page, 100))
+            now = datetime.now(timezone.utc)
+
+            escaped_phrase = phrase_str.replace('"', '\\"')
+            query_parts = ["type:ticket", f'"{escaped_phrase}"']
+
+            if organization:
+                org_str = str(organization).strip()
+                if org_str:
+                    query_parts.append(f'organization:"{org_str}"')
+
+            if updated_since:
+                query_parts.append(f"updated>{str(updated_since).strip()}")
+
+            if updated_before:
+                query_parts.append(f"updated<{str(updated_before).strip()}")
+
+            if status:
+                query_parts.append(f"status:{str(status).strip()}")
+            elif not include_solved:
+                query_parts.append("status<solved")
+
+            if exclude_internal:
+                query_parts.append("-tags:internal")
+
+            if comment_author:
+                commenter = str(comment_author).strip()
+                if commenter.isdigit():
+                    query_parts.append(f"commenter:{commenter}")
+                elif commenter:
+                    query_parts.append(f'commenter:"{commenter}"')
+
+            query = " ".join(query_parts)
+            params = {
+                "query": query,
+                "page": str(page),
+                "per_page": str(per_page),
+                "sort_by": sort_by,
+                "sort_order": sort_order,
+            }
+            url = f"{self.base_url}/search.json?{urllib.parse.urlencode(params)}"
+
+            logger.info(f"Searching tickets by text via search API: {url}")
+            data = self._json_get(url)
+
+            results = data.get("results", [])
+            ticket_list = []
+            for item in results:
+                if item.get("result_type") not in (None, "ticket"):
+                    continue
+                ticket_list.append(self._build_ticket_list_item(item, now))
+
+            return {
+                "tickets": ticket_list,
+                "page": page,
+                "per_page": per_page,
+                "count": len(ticket_list),
+                "sort_by": sort_by,
+                "sort_order": sort_order,
+                "query": query,
+                "filters": {
+                    "phrase": phrase_str,
+                    "organization": organization,
+                    "updated_since": updated_since,
+                    "updated_before": updated_before,
+                    "status": status,
+                    "include_solved": include_solved,
+                    "exclude_internal": exclude_internal,
+                    "comment_author": comment_author,
+                },
+                "has_more": data.get("next_page") is not None,
+                "next_page": page + 1 if data.get("next_page") else None,
+                "previous_page": page - 1 if page > 1 else None,
+            }
+        except urllib.error.HTTPError as e:
+            error_body = e.read().decode() if e.fp else "No response body"
+            raise Exception(f"Failed to search tickets by text: HTTP {e.code} - {e.reason}. {error_body}")
+        except Exception as e:
+            raise Exception(f"Failed to search tickets by text: {str(e)}")
 
     def get_all_articles(self) -> Dict[str, Any]:
         """

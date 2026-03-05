@@ -82,23 +82,53 @@ Adjust the paths to match your environment. After saving the file, restart Claud
 
 ## Resources
 
-- zendesk://knowledge-base, get access to the whole help center articles.
+- `zendesk://knowledge-base`
+  - Returns Zendesk Help Center sections and articles as JSON.
+  - Includes metadata with section count and total article count.
+  - Cached for 1 hour server-side.
 
 ## Prompts
 
-### analyze-ticket
+### analyze-ticket (`ticket_id`)
 
-Analyze a Zendesk ticket and provide a detailed analysis of the ticket.
+Returns the QA analysis rubric template for a specific ticket id.
 
-### draft-ticket-response
+### draft-ticket-response (`ticket_id`)
 
-Draft a response to a Zendesk ticket.
+Returns a response-drafting prompt for a specific ticket.
+
+### ticket-title-review-policy
+
+Returns the ticket-title naming policy template.
+
+### review-ticket-title (`ticket_id`)
+
+Returns the title-review policy plus instructions for reviewing one ticket title.
 
 ## Tools
 
+### get_ticket (`ticket_id`)
+
+Fetch one ticket with normalized custom field values and tags.
+
+### get_ticket_summary (`ticket_id`)
+
+Fetch one ticket and return a compact display-ready markdown summary.
+
+### review_ticket (`ticket_id`)
+
+Returns a full review packet:
+- ticket payload
+- ticket comments (including attachment metadata)
+- analysis rubric text
+
+Review rubric now requires reporting escalation timing, including:
+- `Time to escalation from ticket creation`
+- for `crash_detected` tickets, explicit escalation-latency reporting (or `Not found` + process gap if timestamp is missing)
+
 ### get_tickets
 
-Fetch the latest tickets with pagination support
+Fetch ticket list with pagination and optional filters.
 
 - Input:
   - `page` (integer, optional): Page number (defaults to 1)
@@ -111,94 +141,74 @@ Fetch the latest tickets with pagination support
   - `last_hours` (integer, optional): Relative filter. Example: `5` means tickets updated in the last 5 hours
   - `stale_hours` (integer, optional): Relative stale filter. Example: `24` means tickets not updated in the last 24 hours
   - `include_solved` (boolean, optional): Include solved/closed tickets when using `stale_hours`
+  - `exclude_internal` (boolean, optional): Exclude tickets tagged `internal` from results
 
-- Client return shape: `ZendeskClient.get_tickets(...)` returns a JSON object, not a bare array.
+- Output:
+  - Structured result (`structured_output=True`) with ticket list + pagination + optional `filters`.
+  - Each ticket includes stale age fields: `stale_age_hours`, `stale_age_days`.
 
-```json
-{
-  "tickets": [
-    {
-      "id": 101,
-      "subject": "New billing issue",
-      "status": "open",
-      "priority": "high",
-      "description": "Customer cannot update card",
-      "created_at": "2026-03-02T13:00:00Z",
-      "updated_at": "2026-03-02T14:45:00Z",
-      "requester_id": 2001,
-      "assignee_id": 3001,
-      "organization_id": 4001,
-      "custom_fields": {
-        "Team": "billing"
-      }
-    }
-  ],
-  "page": 1,
-  "per_page": 25,
-  "count": 1,
-  "sort_by": "created_at",
-  "sort_order": "desc",
-  "filters": {
-    "agent": null,
-    "organization": null,
-    "updated_since": "2026-03-02T10:30:00+00:00",
-    "last_hours": 5,
-    "stale_hours": null,
-    "include_solved": false
-  },
-  "has_more": false,
-  "next_page": null,
-  "previous_page": null
-}
-```
+### search_tickets_by_text
 
-- Notes:
-  - `tickets` is always an array of ticket objects.
-  - `count` is the number of ticket objects returned in the current response page.
-  - `filters` is included for search-based calls such as `last_hours`, `stale_hours`, `agent`, `organization`, or `updated_since`.
-  - `custom_fields` is always an object keyed by field name when field metadata is available. It is not returned as the raw Zendesk list format.
-  - Search results that are not tickets are filtered out before this object is returned.
-  - When no filters are supplied and the client falls back to `/tickets.json`, the top-level shape is the same except `filters` is not included.
-
-- MCP server return shape: the `get_tickets` tool wraps that same object inside a single MCP text response whose `text` value is JSON.
-
-```json
-[
-  {
-    "type": "text",
-    "text": "{\n  \"tickets\": [...],\n  \"page\": 1,\n  \"per_page\": 25,\n  \"count\": 1,\n  \"sort_by\": \"created_at\",\n  \"sort_order\": \"desc\",\n  \"filters\": {\n    \"last_hours\": 5\n  },\n  \"has_more\": false,\n  \"next_page\": null,\n  \"previous_page\": null\n}"
-  }
-]
-```
-
-- Tests covering the expected format live in [`src/zendesk_mcp_server/ticket_test.py`](./src/zendesk_mcp_server/ticket_test.py).
-
-### get_ticket
-
-Retrieve a Zendesk ticket by its ID
+Search ticket content by phrase, with optional narrowing.
 
 - Input:
-  - `ticket_id` (integer): The ID of the ticket to retrieve
+  - `phrase` (string, required)
+  - `page`, `per_page`, `sort_by`, `sort_order`
+  - `organization` (optional)
+  - `updated_since` (optional)
+  - `updated_before` (optional)
+  - `last_days` (optional shorthand that maps to `updated_since`)
+  - `status` (optional)
+  - `include_solved` (optional)
+  - `exclude_internal` (optional)
+  - `comment_author` (optional, id/name/email)
 
-### get_ticket_comments
+- Output:
+  - Structured result with tickets, built search query string, filters, and pagination fields.
 
-Retrieve all comments for a Zendesk ticket by its ID
+### sample_solved_tickets_for_agent
+
+Randomly sample solved tickets for a specific agent in a date window.
 
 - Input:
-  - `ticket_id` (integer): The ID of the ticket to get comments for
+  - `agent` (required)
+  - `solved_after` (required, inclusive date)
+  - `solved_before` (required, exclusive date)
+  - `count` (default `4`)
+  - `exclude_api_created` (default `false`)
+  - `seed` (optional for repeatable sampling)
+  - `max_pool` (default `250`)
+
+- Output:
+  - Structured sample result with sampled tickets, pool/retrieval stats, truncation flag, and exclusion counts.
+
+### review_random_solved_tickets_for_agent
+
+Samples solved tickets and returns a combined review input packet for all sampled tickets.
+
+- Input:
+  - Same inputs as `sample_solved_tickets_for_agent`
+
+- Output:
+  - Structured result including sampled ticket ids and `review_input` (rubric + ticket evidence bundle).
+
+### get_ticket_comments (`ticket_id`)
+
+Fetch all comments for a ticket, including attachment metadata:
+- `id`, `file_name`, `content_type`, `size`, `inline`
 
 ### create_ticket_comment
 
-Create a new comment on an existing Zendesk ticket
+Create a new comment on an existing ticket.
 
 - Input:
   - `ticket_id` (integer): The ID of the ticket to comment on
-  - `comment` (string): The comment text/content to add
+  - `comment` (string): Comment body
   - `public` (boolean, optional): Whether the comment should be public (defaults to true)
 
 ### create_ticket
 
-Create a new Zendesk ticket
+Create a new Zendesk ticket.
 
 - Input:
   - `subject` (string): Ticket subject
@@ -212,7 +222,7 @@ Create a new Zendesk ticket
 
 ### update_ticket
 
-Update fields on an existing Zendesk ticket (e.g., status, priority, assignee)
+Update fields on an existing ticket.
 
 - Input:
   - `ticket_id` (integer): The ID of the ticket to update
@@ -225,3 +235,11 @@ Update fields on an existing Zendesk ticket (e.g., status, priority, assignee)
   - `tags` (array[string], optional)
   - `custom_fields` (array[object], optional)
   - `due_at` (string, optional): ISO8601 datetime
+
+### get_ticket_fields
+
+Lists Zendesk ticket fields with:
+- `id`
+- `title`
+- `type`
+- `active`

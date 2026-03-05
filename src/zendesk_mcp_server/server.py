@@ -1,7 +1,8 @@
 import json
 import logging
 import os
-from datetime import datetime, timezone
+import random
+from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any
 
 from cachetools.func import ttl_cache
@@ -9,6 +10,7 @@ from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field
 
+from zendesk_mcp_server.ticket_analysis import build_batch_ticket_review_input, build_ticket_analysis_input
 from zendesk_mcp_server.ticket_display import apply_ticket_field_displays
 from zendesk_mcp_server.ticket_field_metadata import TicketFieldOptionResolver
 from zendesk_mcp_server.zendesk_client import ZendeskClient
@@ -47,6 +49,7 @@ Allowed variations:
 - Reasonable variations of the above are acceptable if the structure is still clear.
 - Ignore case-only differences such as iOS vs IOS.
 - If the ticket is a trial ticket, the word "Trial" may appear before the customer name.
+- A middle segment like "Platform" or "OS" is acceptable as platform context, even without a specific platform/version value.
 - Minor wording differences are acceptable if the title still clearly communicates:
   1. who the customer is
   2. what platform, feature, or integration is involved
@@ -57,8 +60,9 @@ Validation rules:
 - A title is INVALID if it is missing a key element, is ambiguous, is poorly structured, or does not follow the expected segmented pattern closely enough.
 - Prefer practical judgment over rigid literal matching.
 - Do not fail a title only because of capitalization differences.
+- Do not mark platform as missing when a dedicated platform category segment (for example "Platform" or "OS") is present.
 - Do not invent missing facts. If information is missing from the title, mark it invalid and explain what is missing.
-- An escalated Ticket can only marked as solved when the customer confirmed that the provided solution worked.
+- An escalated Ticket (the Escalation Status field is populated) can only marked as solved when the customer confirmed that the provided solution worked.
 
 When reviewing a title, return one line each and exactly:
 Validation: VALID or INVALID
@@ -99,7 +103,10 @@ Required output:
    Provide the following items, each on its own line:
    - Opened:
    - First agent response:
+   - Crash identified:
+   - Stacktrace requested:
    - Escalated:
+   - Time to escalation from ticket creation:
    - Solution built:
    - Solution delivered to customer:
    - Customer acknowledgement:
@@ -115,9 +122,19 @@ Required output:
    Include a short explanation for the score.
 
 Rules:
+- Ticket Title is formated correctly.
+- Escalated Tickets are tickets where the Escalation Status field is populated.
 - Do not use external assumptions or general policy knowledge unless explicitly present in the ticket.
 - Do not treat missing evidence as completed work.
-- If the customer has not explicitly confirmed the solution worked, do not mark the resolution as customer-acknowledged.
+- For Escalated Tickets, if the customer has not explicitly confirmed the solution worked, do not mark the resolution as customer-acknowledged.
+- Crash ticket rule: if the ticket has tag "crash_detected", verify crash evidence handling.
+- For crash_detected tickets, treat stacktrace evidence as present only when there is explicit stacktrace content in comments or a relevant crash attachment (for example .ips, .crash, .log, .txt, .dmp).
+- If a crash_detected ticket has no stacktrace evidence, verify the assigned support engineer asked the customer for stacktrace/crash log details. If no such request appears in comments, flag this as a process gap.
+- For crash_detected tickets, enforce stacktrace request timeliness: if stacktrace evidence is not already present, the first explicit support request for stacktrace/crash logs should occur within 1 hour of crash identification.
+- For this check, infer crash identification time from the earliest explicit crash evidence in the ticket/comments; if the ticket already has tag "crash_detected", use ticket created timestamp when no earlier signal is available.
+- If the first stacktrace request is more than 1 hour after crash identification, explicitly flag "Late stacktrace request (>1h)" in Process Review and reduce the Compliance Score.
+- For crash_detected tickets, always calculate and report "Time to escalation from ticket creation" using ticket created timestamp and the first explicit escalation timestamp in the evidence.
+- If escalation evidence exists but no escalation timestamp can be determined, write "Not found" and explicitly flag this as a process gap.
 - Prefer concise, evidence-based statements.
 """
 
@@ -195,6 +212,8 @@ class TicketItem(BaseModel):
     priority: str | None = None
     created_at: str | None = None
     updated_at: str | None = None
+    stale_age_hours: int | None = None
+    stale_age_days: int | None = None
 
 
 class TicketFilters(BaseModel):
@@ -204,6 +223,7 @@ class TicketFilters(BaseModel):
     last_hours: int | None = None
     stale_hours: int | None = None
     include_solved: bool = False
+    exclude_internal: bool = False
 
 
 class GetTicketsResult(BaseModel):
@@ -217,6 +237,61 @@ class GetTicketsResult(BaseModel):
     has_more: bool
     next_page: int | None = None
     previous_page: int | None = None
+
+
+class SearchTicketsByTextFilters(BaseModel):
+    phrase: str
+    organization: str | None = None
+    updated_since: str | None = None
+    updated_before: str | None = None
+    status: str | None = None
+    include_solved: bool = False
+    exclude_internal: bool = False
+    comment_author: str | None = None
+
+
+class SearchTicketsByTextResult(BaseModel):
+    tickets: list[TicketItem]
+    page: int
+    per_page: int
+    count: int
+    sort_by: str
+    sort_order: str
+    query: str
+    filters: SearchTicketsByTextFilters
+    has_more: bool
+    next_page: int | None = None
+    previous_page: int | None = None
+
+
+class RandomTicketSampleResult(BaseModel):
+    tickets: list[TicketItem]
+    requested_count: int
+    sampled_count: int
+    total_matches: int
+    retrieved_count: int
+    truncated: bool
+    exclude_api_created: bool = False
+    excluded_api_created_count: int = 0
+    agent: str
+    solved_after: str
+    solved_before: str
+    seed: int | None = None
+
+
+class RandomTicketReviewResult(BaseModel):
+    sampled_ticket_ids: list[int]
+    sampled_count: int
+    total_matches: int
+    retrieved_count: int
+    truncated: bool
+    exclude_api_created: bool = False
+    excluded_api_created_count: int = 0
+    agent: str
+    solved_after: str
+    solved_before: str
+    seed: int | None = None
+    review_input: str
 
 
 @mcp.prompt(name="analyze-ticket", description="Analyze a Zendesk ticket and provide insights")
@@ -275,6 +350,23 @@ def get_ticket_summary(
 ) -> str:
     ticket = _prepare_ticket_payload(ticket_id)
     return _build_ticket_summary(ticket)
+
+
+@mcp.tool(
+    name="review_ticket",
+    description="Fetch ticket evidence and the review rubric for a Zendesk ticket",
+)
+def review_ticket(
+    ticket_id: Annotated[int, Field(description="The ID of the ticket to review")],
+) -> str:
+    ticket = _prepare_ticket_payload(ticket_id)
+    comments = zendesk_client.get_ticket_comments(ticket_id)
+    return build_ticket_analysis_input(
+        ticket_id=ticket_id,
+        ticket=ticket,
+        comments=comments,
+        rubric=TICKET_ANALYSIS_TEMPLATE.format(ticket_id=ticket_id),
+    )
 
 
 @mcp.tool(name="create_ticket", description="Create a new Zendesk ticket")
@@ -338,6 +430,10 @@ def get_tickets(
         bool,
         Field(description="Include solved/closed tickets in stale detection results."),
     ] = False,
+    exclude_internal: Annotated[
+        bool,
+        Field(description="Exclude tickets tagged internal from search results."),
+    ] = False,
 ) -> GetTicketsResult:
     tickets = zendesk_client.get_tickets(
         page=page,
@@ -350,8 +446,179 @@ def get_tickets(
         last_hours=last_hours,
         stale_hours=stale_hours,
         include_solved=include_solved,
+        exclude_internal=exclude_internal,
     )
     return GetTicketsResult.model_validate(tickets)
+
+
+@mcp.tool(
+    name="search_tickets_by_text",
+    description="Search ticket descriptions/comments by phrase, with optional organization/timeframe and comment-author filters",
+    structured_output=True,
+)
+def search_tickets_by_text(
+    phrase: Annotated[str, Field(description="Text or phrase to search for, e.g. Facephi.")],
+    page: Annotated[int, Field(description="Page number")] = 1,
+    per_page: Annotated[int, Field(description="Number of tickets per page (max 100)")] = 25,
+    sort_by: Annotated[str, Field(description="Field to sort by (updated_at, created_at, priority, status)")] = "updated_at",
+    sort_order: Annotated[str, Field(description="Sort order (asc or desc)")] = "desc",
+    organization: Annotated[str | None, Field(description="Optional organization name filter.")] = None,
+    updated_since: Annotated[
+        str | None,
+        Field(description="Optional inclusive lower bound for updated timestamp/date."),
+    ] = None,
+    updated_before: Annotated[
+        str | None,
+        Field(description="Optional exclusive upper bound for updated timestamp/date."),
+    ] = None,
+    last_days: Annotated[
+        int | None,
+        Field(description="Optional shorthand timeframe (e.g. 7 = updated in last 7 days)."),
+    ] = None,
+    status: Annotated[str | None, Field(description="Optional ticket status filter (open, pending, solved, etc.).")] = None,
+    include_solved: Annotated[
+        bool,
+        Field(description="Include solved/closed tickets when status is not explicitly provided."),
+    ] = False,
+    exclude_internal: Annotated[
+        bool,
+        Field(description="Exclude tickets tagged internal from search results."),
+    ] = False,
+    comment_author: Annotated[
+        str | None,
+        Field(description="Optional comment author filter (name/email/id), e.g. Tom."),
+    ] = None,
+) -> SearchTicketsByTextResult:
+    normalized_updated_since = updated_since
+    if last_days is not None:
+        normalized_updated_since = (datetime.now(timezone.utc) - timedelta(days=int(last_days))).replace(microsecond=0).isoformat()
+
+    result = zendesk_client.search_tickets_by_text(
+        phrase=phrase,
+        page=page,
+        per_page=per_page,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        organization=organization,
+        updated_since=normalized_updated_since,
+        updated_before=updated_before,
+        status=status,
+        include_solved=include_solved,
+        exclude_internal=exclude_internal,
+        comment_author=comment_author,
+    )
+    return SearchTicketsByTextResult.model_validate(result)
+
+
+@mcp.tool(
+    name="sample_solved_tickets_for_agent",
+    description="Return a random lightweight sample of solved tickets for an agent within a solved date range",
+    structured_output=True,
+)
+def sample_solved_tickets_for_agent(
+    agent: Annotated[str, Field(description="Agent assignee filter. Can be agent id, email, or name.")],
+    solved_after: Annotated[str, Field(description="Inclusive lower bound date for solved tickets, e.g. 2026-02-01.")],
+    solved_before: Annotated[str, Field(description="Exclusive upper bound date for solved tickets, e.g. 2026-03-01.")],
+    count: Annotated[int, Field(description="How many random tickets to return.")] = 4,
+    exclude_api_created: Annotated[
+        bool,
+        Field(description="Exclude tickets whose Zendesk via.channel is api."),
+    ] = False,
+    seed: Annotated[int | None, Field(description="Optional random seed for repeatable sampling.")] = None,
+    max_pool: Annotated[int, Field(description="Maximum number of matching tickets to retrieve before sampling.")] = 250,
+) -> RandomTicketSampleResult:
+    search_result = zendesk_client.search_solved_tickets_for_agent(
+        agent=agent,
+        solved_after=solved_after,
+        solved_before=solved_before,
+        max_results=max_pool,
+        exclude_api_created=exclude_api_created,
+    )
+
+    tickets = search_result["tickets"]
+    sample_size = min(max(count, 1), len(tickets))
+    rng = random.Random(seed)
+    sampled_tickets = rng.sample(tickets, sample_size) if sample_size else []
+
+    return RandomTicketSampleResult.model_validate(
+        {
+            "tickets": sampled_tickets,
+            "requested_count": count,
+            "sampled_count": len(sampled_tickets),
+            "total_matches": search_result["total_matches"],
+            "retrieved_count": search_result["retrieved_count"],
+            "truncated": search_result["truncated"],
+            "exclude_api_created": exclude_api_created,
+            "excluded_api_created_count": search_result["excluded_api_created_count"],
+            "agent": agent,
+            "solved_after": solved_after,
+            "solved_before": solved_before,
+            "seed": seed,
+        }
+    )
+
+
+@mcp.tool(
+    name="review_random_solved_tickets_for_agent",
+    description="Sample solved tickets for an agent in a date range and return the full review packet for each sampled ticket",
+    structured_output=True,
+)
+def review_random_solved_tickets_for_agent(
+    agent: Annotated[str, Field(description="Agent assignee filter. Can be agent id, email, or name.")],
+    solved_after: Annotated[str, Field(description="Inclusive lower bound date for solved tickets, e.g. 2026-02-01.")],
+    solved_before: Annotated[str, Field(description="Exclusive upper bound date for solved tickets, e.g. 2026-03-01.")],
+    count: Annotated[int, Field(description="How many random tickets to review.")] = 4,
+    exclude_api_created: Annotated[
+        bool,
+        Field(description="Exclude tickets whose Zendesk via.channel is api."),
+    ] = False,
+    seed: Annotated[int | None, Field(description="Optional random seed for repeatable sampling.")] = None,
+    max_pool: Annotated[int, Field(description="Maximum number of matching tickets to retrieve before sampling.")] = 250,
+) -> RandomTicketReviewResult:
+    sample_result = sample_solved_tickets_for_agent(
+        agent=agent,
+        solved_after=solved_after,
+        solved_before=solved_before,
+        count=count,
+        exclude_api_created=exclude_api_created,
+        seed=seed,
+        max_pool=max_pool,
+    )
+
+    reviews = []
+    for sampled_ticket in sample_result.tickets:
+        ticket_id = sampled_ticket.id
+        if ticket_id is None:
+            continue
+        reviews.append(
+            {
+                "ticket_id": ticket_id,
+                "ticket": _prepare_ticket_payload(ticket_id),
+                "comments": zendesk_client.get_ticket_comments(ticket_id),
+            }
+        )
+
+    review_input = build_batch_ticket_review_input(
+        reviews=reviews,
+        rubric_template=TICKET_ANALYSIS_TEMPLATE,
+    )
+
+    return RandomTicketReviewResult.model_validate(
+        {
+            "sampled_ticket_ids": [review["ticket_id"] for review in reviews],
+            "sampled_count": len(reviews),
+            "total_matches": sample_result.total_matches,
+            "retrieved_count": sample_result.retrieved_count,
+            "truncated": sample_result.truncated,
+            "exclude_api_created": sample_result.exclude_api_created,
+            "excluded_api_created_count": sample_result.excluded_api_created_count,
+            "agent": sample_result.agent,
+            "solved_after": sample_result.solved_after,
+            "solved_before": sample_result.solved_before,
+            "seed": sample_result.seed,
+            "review_input": review_input,
+        }
+    )
 
 
 @mcp.tool(name="get_ticket_comments", description="Retrieve all comments for a Zendesk ticket by its ID")

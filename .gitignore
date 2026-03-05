@@ -18,3 +18,4 @@ wheels/
 .env.danielzendesk
 .DS_Store
 src/zendesk_mcp_server/zendesk-mcp.log
+zendesk-mcp.log
