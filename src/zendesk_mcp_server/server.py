@@ -32,6 +32,10 @@ zendesk_client = ZendeskClient(
 
 mcp = FastMCP("Zendesk Server")
 server = mcp
+ZENDESK_TICKET_LINK_BASE_URL = os.getenv(
+    "ZENDESK_TICKET_LINK_BASE_URL",
+    "https://appdomesupport.zendesk.com/agent/tickets",
+)
 
 
 TITLE_REVIEW_POLICY_TEMPLATE = """
@@ -161,6 +165,19 @@ def _prepare_ticket_payload(ticket_id: int) -> dict[str, Any]:
     return ticket
 
 
+def _ticket_url(ticket_id: int | None) -> str | None:
+    if ticket_id is None:
+        return None
+    return f"{ZENDESK_TICKET_LINK_BASE_URL}/{ticket_id}"
+
+
+def _ticket_link(ticket_id: int | None) -> str | None:
+    ticket_url = _ticket_url(ticket_id)
+    if ticket_url is None:
+        return None
+    return f"[{ticket_id}]({ticket_url})"
+
+
 def _format_display_datetime(value: str | None) -> str:
     if not value:
         return "N/A"
@@ -174,8 +191,10 @@ def _format_display_datetime(value: str | None) -> str:
 
 def _build_ticket_summary(ticket: dict[str, Any]) -> str:
     custom_fields = ticket.get("custom_fields", {})
+    ticket_id = ticket.get("id")
+    ticket_link = _ticket_link(ticket_id) or f"#{ticket_id}"
     lines = [
-        f"# Ticket #{ticket.get('id')} - {ticket.get('subject', 'Untitled')}",
+        f"# Ticket {ticket_link} - {ticket.get('subject', 'Untitled')}",
         "",
         "| Field | Value |",
         "| --- | --- |",
@@ -207,6 +226,8 @@ def _build_ticket_summary(ticket: dict[str, Any]) -> str:
 
 class TicketItem(BaseModel):
     id: int | None = None
+    ticket_url: str | None = None
+    ticket_link: str | None = None
     subject: str | None = None
     status: str | None = None
     priority: str | None = None
@@ -282,6 +303,8 @@ class RandomTicketSampleResult(BaseModel):
 
 class RandomTicketReviewResult(BaseModel):
     sampled_ticket_ids: list[int]
+    sampled_ticket_urls: list[str]
+    sampled_ticket_links: list[str]
     sampled_count: int
     total_matches: int
     retrieved_count: int
@@ -303,6 +326,8 @@ class TicketTroubleFlag(BaseModel):
 
 class TicketTroubleAssessment(BaseModel):
     ticket_id: int
+    ticket_url: str
+    ticket_link: str
     subject: str | None = None
     status: str | None = None
     priority: str | None = None
@@ -331,6 +356,10 @@ TROUBLE_FLAG_WEIGHTS: dict[str, int] = {
 }
 SEVERITY_FALLBACK_WEIGHTS = {"high": 30, "medium": 15, "low": 5}
 SEVERITY_RANK = {"high": 3, "medium": 2, "low": 1}
+CUSTOMER_FOLLOW_UP_SLA_HOURS = 4
+CUSTOMER_FOLLOW_UP_PRIORITIES = {"low", "normal"}
+NO_RESPONSE_EXPECTED_OPEN_STALE_DAYS = 5
+OPEN_TICKET_STATUSES = {"new", "open", "pending", "hold", "on-hold"}
 
 
 def _parse_iso_datetime(value: str | None) -> datetime | None:
@@ -355,6 +384,22 @@ def _is_title_structured(subject: str | None) -> bool:
     segments = [segment.strip() for segment in subject.split("|")]
     segments = [segment for segment in segments if segment]
     return len(segments) >= 3
+
+
+def _is_no_response_expected_comment(comment: dict[str, Any]) -> bool:
+    body = str(comment.get("body") or "").lower()
+    html_body = str(comment.get("html_body") or "").lower()
+    text = f"{body} {html_body}"
+    no_response_expected_terms = [
+        "you can close",
+        "please close",
+        "feel free to close",
+        "thanks, this worked",
+        "thank you, this worked",
+        "resolved, thanks",
+        "i will get back to you",
+    ]
+    return any(term in text for term in no_response_expected_terms)
 
 
 def _build_ticket_trouble_assessment(
@@ -432,28 +477,81 @@ def _build_ticket_trouble_assessment(
     customer_public_comments = [
         c for c in public_comments_sorted if requester_id is not None and c.get("author_id") == requester_id
     ]
-    for customer_comment in customer_public_comments:
-        customer_time = _parse_iso_datetime(customer_comment.get("created_at"))
-        has_follow_up = False
-        for possible_reply in public_comments_sorted:
-            reply_time = _parse_iso_datetime(possible_reply.get("created_at"))
-            if customer_time is None or reply_time is None:
+    if priority in CUSTOMER_FOLLOW_UP_PRIORITIES:
+        follow_up_deadline = timedelta(hours=CUSTOMER_FOLLOW_UP_SLA_HOURS)
+        for customer_comment in customer_public_comments:
+            customer_time = _parse_iso_datetime(customer_comment.get("created_at"))
+            if customer_time is None:
                 continue
-            if reply_time <= customer_time:
-                continue
-            if requester_id is not None and possible_reply.get("author_id") == requester_id:
-                continue
-            has_follow_up = True
-            break
-        if not has_follow_up:
-            flags.append(
-                TicketTroubleFlag(
-                    code="customer_comment_no_response",
-                    severity="high",
-                    message="Customer left a public comment without a later public agent response.",
+            has_follow_up = False
+            first_follow_up_after_customer: datetime | None = None
+            for possible_reply in public_comments_sorted:
+                reply_time = _parse_iso_datetime(possible_reply.get("created_at"))
+                if reply_time is None:
+                    continue
+                if reply_time <= customer_time:
+                    continue
+                if requester_id is not None and possible_reply.get("author_id") == requester_id:
+                    continue
+                has_follow_up = True
+                first_follow_up_after_customer = reply_time
+                break
+
+            if _is_no_response_expected_comment(customer_comment):
+                reference_time = updated_at or datetime.now(timezone.utc)
+                has_any_later_public_comment = any(
+                    (_parse_iso_datetime(possible_reply.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc))
+                    > customer_time
+                    for possible_reply in public_comments_sorted
                 )
-            )
-            break
+                if (
+                    status in OPEN_TICKET_STATUSES
+                    and (reference_time - customer_time) > timedelta(days=NO_RESPONSE_EXPECTED_OPEN_STALE_DAYS)
+                    and not has_any_later_public_comment
+                ):
+                    flags.append(
+                        TicketTroubleFlag(
+                            code="customer_comment_no_response",
+                            severity="high",
+                            message=(
+                                "Ticket stayed open more than "
+                                f"{NO_RESPONSE_EXPECTED_OPEN_STALE_DAYS} days after a no-response-expected "
+                                "customer update, with no later public comments."
+                            ),
+                        )
+                    )
+                    break
+                continue
+
+            if has_follow_up and first_follow_up_after_customer is not None:
+                response_delay = first_follow_up_after_customer - customer_time
+                if response_delay > follow_up_deadline:
+                    flags.append(
+                        TicketTroubleFlag(
+                            code="customer_comment_no_response",
+                            severity="high",
+                            message=(
+                                "Customer public comment did not receive a public agent response "
+                                f"within {CUSTOMER_FOLLOW_UP_SLA_HOURS}h."
+                            ),
+                        )
+                    )
+                    break
+                continue
+
+            reference_time = updated_at or datetime.now(timezone.utc)
+            if reference_time - customer_time > follow_up_deadline:
+                flags.append(
+                    TicketTroubleFlag(
+                        code="customer_comment_no_response",
+                        severity="high",
+                        message=(
+                            "Customer public comment did not receive a public agent response "
+                            f"within {CUSTOMER_FOLLOW_UP_SLA_HOURS}h."
+                        ),
+                    )
+                )
+                break
 
     confirmation_terms = ["resolved", "works", "working", "fixed", "thank", "confirmed", "solved"]
     has_customer_confirmation = any(
@@ -547,6 +645,8 @@ def _build_ticket_trouble_assessment(
 
     return TicketTroubleAssessment(
         ticket_id=ticket_id,
+        ticket_url=_ticket_url(ticket_id) or "",
+        ticket_link=_ticket_link(ticket_id) or "",
         subject=subject,
         status=status,
         priority=priority,
@@ -937,6 +1037,8 @@ def review_random_solved_tickets_for_agent(
     return RandomTicketReviewResult.model_validate(
         {
             "sampled_ticket_ids": [review["ticket_id"] for review in reviews],
+            "sampled_ticket_urls": [(_ticket_url(review["ticket_id"]) or "") for review in reviews],
+            "sampled_ticket_links": [(_ticket_link(review["ticket_id"]) or "") for review in reviews],
             "sampled_count": len(reviews),
             "total_matches": sample_result.total_matches,
             "retrieved_count": sample_result.retrieved_count,

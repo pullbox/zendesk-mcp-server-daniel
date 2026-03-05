@@ -82,6 +82,8 @@ class TestGetTicketsLastFiveHours(unittest.TestCase):
             result["tickets"][0],
             {
                 "id": 101,
+                "ticket_url": "https://example.zendesk.com/agent/tickets/101",
+                "ticket_link": "[101](https://example.zendesk.com/agent/tickets/101)",
                 "subject": "New billing issue",
                 "status": "open",
                 "priority": "high",
@@ -571,9 +573,16 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
         structured = response.root.structuredContent
         self.assertEqual(structured["scanned_count"], 1)
         self.assertEqual(structured["in_trouble_count"], 1)
+        self.assertEqual(
+            structured["tickets"][0]["ticket_url"],
+            "https://appdomesupport.zendesk.com/agent/tickets/777",
+        )
+        self.assertEqual(
+            structured["tickets"][0]["ticket_link"],
+            "[777](https://appdomesupport.zendesk.com/agent/tickets/777)",
+        )
         flag_codes = [flag["code"] for flag in structured["tickets"][0]["flags"]]
         self.assertEqual(flag_codes[0], "crash_process_gap")
-        self.assertIn("customer_comment_no_response", flag_codes)
         self.assertIn("solved_without_customer_confirmation", flag_codes)
         self.assertIn("high_priority_no_recent_updates", flag_codes)
         self.assertEqual(structured["tickets"][0]["risk_score"], 100)
@@ -670,6 +679,318 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
         self.assertEqual([ticket["ticket_id"] for ticket in structured["tickets"]], [100, 200])
         self.assertGreater(structured["tickets"][0]["risk_score"], structured["tickets"][1]["risk_score"])
         self.assertEqual(structured["tickets"][0]["flags"][0]["code"], "missing_initial_response")
+        self.assertFalse(response.root.isError)
+
+    def test_scan_tickets_in_trouble_does_not_flag_customer_comment_before_4h_deadline(self) -> None:
+        list_payload = {
+            "tickets": [
+                {"id": 901, "subject": "ACME | iOS | Login issue", "status": "open", "priority": "normal"},
+            ],
+            "count": 1,
+            "page": 1,
+            "per_page": 25,
+            "sort_by": "created_at",
+            "sort_order": "desc",
+            "filters": {
+                "created_last_hours": 4,
+                "exclude_internal": True,
+            },
+            "has_more": False,
+            "next_page": None,
+            "previous_page": None,
+        }
+        full_ticket_payload = {
+            "id": 901,
+            "subject": "ACME | iOS | Login issue",
+            "status": "open",
+            "priority": "normal",
+            "created_at": "2026-03-05T10:00:00Z",
+            "updated_at": "2026-03-05T11:30:00Z",
+            "requester_id": 1001,
+            "tags": [],
+            "custom_fields": {
+                "Status With": "customer",
+                "Support Stage": "investigation",
+                "Release Stage": "n/a",
+            },
+        }
+        comments_payload = [
+            {
+                "author_id": 2002,
+                "public": True,
+                "body": "Looking into this.",
+                "html_body": "<p>Looking into this.</p>",
+                "created_at": "2026-03-05T10:10:00Z",
+                "attachments": [],
+            },
+            {
+                "author_id": 1001,
+                "public": True,
+                "body": "Any update?",
+                "html_body": "<p>Any update?</p>",
+                "created_at": "2026-03-05T11:00:00Z",
+                "attachments": [],
+            },
+        ]
+
+        request = CallToolRequest(
+            method="tools/call",
+            params=CallToolRequestParams(
+                name="scan_tickets_in_trouble",
+                arguments={"created_last_hours": 4, "per_page": 25},
+            ),
+        )
+
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        with (
+            patch.object(server_module, "zendesk_client") as mock_client,
+            patch.object(server_module, "_prepare_ticket_payload", return_value=full_ticket_payload),
+        ):
+            mock_client.get_tickets.return_value = list_payload
+            mock_client.get_ticket_comments.return_value = comments_payload
+
+            handler = server_module.mcp._mcp_server.request_handlers[CallToolRequest]
+            response = asyncio.run(handler(request))
+
+        structured = response.root.structuredContent
+        flag_codes = [flag["code"] for flag in structured["tickets"][0]["flags"]]
+        self.assertNotIn("customer_comment_no_response", flag_codes)
+        self.assertFalse(response.root.isError)
+
+    def test_scan_tickets_in_trouble_flags_customer_comment_no_response_for_low_priority_after_4h(self) -> None:
+        list_payload = {
+            "tickets": [
+                {"id": 902, "subject": "ACME | iOS | Login issue", "status": "open", "priority": "low"},
+            ],
+            "count": 1,
+            "page": 1,
+            "per_page": 25,
+            "sort_by": "created_at",
+            "sort_order": "desc",
+            "filters": {
+                "created_last_hours": 4,
+                "exclude_internal": True,
+            },
+            "has_more": False,
+            "next_page": None,
+            "previous_page": None,
+        }
+        full_ticket_payload = {
+            "id": 902,
+            "subject": "ACME | iOS | Login issue",
+            "status": "open",
+            "priority": "low",
+            "created_at": "2026-03-05T10:00:00Z",
+            "updated_at": "2026-03-05T16:30:00Z",
+            "requester_id": 1001,
+            "tags": [],
+            "custom_fields": {
+                "Status With": "customer",
+                "Support Stage": "investigation",
+                "Release Stage": "n/a",
+            },
+        }
+        comments_payload = [
+            {
+                "author_id": 2002,
+                "public": True,
+                "body": "Looking into this.",
+                "html_body": "<p>Looking into this.</p>",
+                "created_at": "2026-03-05T10:10:00Z",
+                "attachments": [],
+            },
+            {
+                "author_id": 1001,
+                "public": True,
+                "body": "Any update?",
+                "html_body": "<p>Any update?</p>",
+                "created_at": "2026-03-05T11:00:00Z",
+                "attachments": [],
+            },
+        ]
+
+        request = CallToolRequest(
+            method="tools/call",
+            params=CallToolRequestParams(
+                name="scan_tickets_in_trouble",
+                arguments={"created_last_hours": 4, "per_page": 25},
+            ),
+        )
+
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        with (
+            patch.object(server_module, "zendesk_client") as mock_client,
+            patch.object(server_module, "_prepare_ticket_payload", return_value=full_ticket_payload),
+        ):
+            mock_client.get_tickets.return_value = list_payload
+            mock_client.get_ticket_comments.return_value = comments_payload
+
+            handler = server_module.mcp._mcp_server.request_handlers[CallToolRequest]
+            response = asyncio.run(handler(request))
+
+        structured = response.root.structuredContent
+        flag_codes = [flag["code"] for flag in structured["tickets"][0]["flags"]]
+        self.assertIn("customer_comment_no_response", flag_codes)
+        self.assertFalse(response.root.isError)
+
+    def test_scan_tickets_in_trouble_ignores_no_response_expected_customer_comment(self) -> None:
+        list_payload = {
+            "tickets": [
+                {"id": 903, "subject": "ACME | iOS | Login issue", "status": "open", "priority": "normal"},
+            ],
+            "count": 1,
+            "page": 1,
+            "per_page": 25,
+            "sort_by": "created_at",
+            "sort_order": "desc",
+            "filters": {
+                "created_last_hours": 4,
+                "exclude_internal": True,
+            },
+            "has_more": False,
+            "next_page": None,
+            "previous_page": None,
+        }
+        full_ticket_payload = {
+            "id": 903,
+            "subject": "ACME | iOS | Login issue",
+            "status": "open",
+            "priority": "normal",
+            "created_at": "2026-03-05T10:00:00Z",
+            "updated_at": "2026-03-07T10:00:00Z",
+            "requester_id": 1001,
+            "tags": [],
+            "custom_fields": {
+                "Status With": "customer",
+                "Support Stage": "investigation",
+                "Release Stage": "n/a",
+            },
+        }
+        comments_payload = [
+            {
+                "author_id": 2002,
+                "public": True,
+                "body": "Please confirm once resolved.",
+                "html_body": "<p>Please confirm once resolved.</p>",
+                "created_at": "2026-03-05T10:10:00Z",
+                "attachments": [],
+            },
+            {
+                "author_id": 1001,
+                "public": True,
+                "body": "Thank you, you can close the ticket.",
+                "html_body": "<p>Thank you, you can close the ticket.</p>",
+                "created_at": "2026-03-05T11:00:00Z",
+                "attachments": [],
+            },
+        ]
+
+        request = CallToolRequest(
+            method="tools/call",
+            params=CallToolRequestParams(
+                name="scan_tickets_in_trouble",
+                arguments={"created_last_hours": 4, "per_page": 25},
+            ),
+        )
+
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        with (
+            patch.object(server_module, "zendesk_client") as mock_client,
+            patch.object(server_module, "_prepare_ticket_payload", return_value=full_ticket_payload),
+        ):
+            mock_client.get_tickets.return_value = list_payload
+            mock_client.get_ticket_comments.return_value = comments_payload
+
+            handler = server_module.mcp._mcp_server.request_handlers[CallToolRequest]
+            response = asyncio.run(handler(request))
+
+        structured = response.root.structuredContent
+        flag_codes = [flag["code"] for flag in structured["tickets"][0]["flags"]]
+        self.assertNotIn("customer_comment_no_response", flag_codes)
+        self.assertFalse(response.root.isError)
+
+    def test_scan_tickets_in_trouble_flags_no_response_expected_comment_when_open_5_days_without_updates(self) -> None:
+        list_payload = {
+            "tickets": [
+                {"id": 904, "subject": "ACME | iOS | Login issue", "status": "open", "priority": "normal"},
+            ],
+            "count": 1,
+            "page": 1,
+            "per_page": 25,
+            "sort_by": "created_at",
+            "sort_order": "desc",
+            "filters": {
+                "created_last_hours": 4,
+                "exclude_internal": True,
+            },
+            "has_more": False,
+            "next_page": None,
+            "previous_page": None,
+        }
+        full_ticket_payload = {
+            "id": 904,
+            "subject": "ACME | iOS | Login issue",
+            "status": "open",
+            "priority": "normal",
+            "created_at": "2026-03-05T10:00:00Z",
+            "updated_at": "2026-03-11T12:30:00Z",
+            "requester_id": 1001,
+            "tags": [],
+            "custom_fields": {
+                "Status With": "customer",
+                "Support Stage": "investigation",
+                "Release Stage": "n/a",
+            },
+        }
+        comments_payload = [
+            {
+                "author_id": 2002,
+                "public": True,
+                "body": "Please confirm once resolved.",
+                "html_body": "<p>Please confirm once resolved.</p>",
+                "created_at": "2026-03-05T10:10:00Z",
+                "attachments": [],
+            },
+            {
+                "author_id": 1001,
+                "public": True,
+                "body": "Thank you, you can close the ticket.",
+                "html_body": "<p>Thank you, you can close the ticket.</p>",
+                "created_at": "2026-03-05T11:00:00Z",
+                "attachments": [],
+            },
+        ]
+
+        request = CallToolRequest(
+            method="tools/call",
+            params=CallToolRequestParams(
+                name="scan_tickets_in_trouble",
+                arguments={"created_last_hours": 4, "per_page": 25},
+            ),
+        )
+
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        with (
+            patch.object(server_module, "zendesk_client") as mock_client,
+            patch.object(server_module, "_prepare_ticket_payload", return_value=full_ticket_payload),
+        ):
+            mock_client.get_tickets.return_value = list_payload
+            mock_client.get_ticket_comments.return_value = comments_payload
+
+            handler = server_module.mcp._mcp_server.request_handlers[CallToolRequest]
+            response = asyncio.run(handler(request))
+
+        structured = response.root.structuredContent
+        flag_codes = [flag["code"] for flag in structured["tickets"][0]["flags"]]
+        self.assertIn("customer_comment_no_response", flag_codes)
         self.assertFalse(response.root.isError)
 
     def test_sample_solved_tickets_for_agent_is_deterministic_with_seed(self) -> None:

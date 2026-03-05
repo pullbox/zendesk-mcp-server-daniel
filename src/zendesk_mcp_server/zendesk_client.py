@@ -43,6 +43,7 @@ class ZendeskClient:
         self.email = email
         self.token = token
         self.base_url = f"https://{subdomain}.zendesk.com/api/v2"
+        self.agent_ticket_base_url = f"https://{subdomain}.zendesk.com/agent/tickets"
         # Create basic auth header
         credentials = f"{email}/token:{token}"
         encoded_credentials = base64.b64encode(credentials.encode()).decode('ascii')
@@ -258,6 +259,8 @@ class ZendeskClient:
     def _build_ticket_list_item(self, ticket: Dict[str, Any], now: datetime) -> Dict[str, Any]:
         updated_at = ticket.get("updated_at")
         updated_dt = self._parse_zendesk_datetime(updated_at)
+        ticket_id = ticket.get("id")
+        ticket_url = f"{self.agent_ticket_base_url}/{ticket_id}" if ticket_id is not None else None
         stale_age_hours = None
         stale_age_days = None
 
@@ -267,7 +270,9 @@ class ZendeskClient:
             stale_age_days = int(age_seconds // 86400)
 
         return {
-            "id": ticket.get("id"),
+            "id": ticket_id,
+            "ticket_url": ticket_url,
+            "ticket_link": f"[{ticket_id}]({ticket_url})" if ticket_url is not None else None,
             "subject": ticket.get("subject"),
             "status": ticket.get("status"),
             "priority": ticket.get("priority"),
