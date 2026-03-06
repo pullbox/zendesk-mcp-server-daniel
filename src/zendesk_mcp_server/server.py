@@ -115,9 +115,16 @@ Required output:
    - Solution delivered to customer:
    - Customer acknowledgement:
    Use exact timestamps when available. Otherwise write "Not found".
-4. Process Review
+4. Attachment Evidence
+   Report each item on its own line:
+   - Crash-related attachments available:
+   - Stacktrace attachments:
+   - Replication path video:
+   - Other crash-related attachments:
+   Use exact attachment filenames when available. Otherwise write "Not found".
+5. Process Review
    List concrete observations about process compliance or non-compliance based on evidence from the ticket and comments.
-5. Compliance Score
+6. Compliance Score
    Give a score from 0 to 100.
    - 90-100: strong evidence of compliant handling
    - 70-89: mostly compliant with minor gaps
@@ -330,6 +337,24 @@ class TicketTroubleFlag(BaseModel):
     message: str
 
 
+class CrashAttachmentSignal(BaseModel):
+    file_name: str
+    evidence_type: str
+    source: str
+    content_type: str | None = None
+    size: int | None = None
+
+
+class CrashAttachmentSummary(BaseModel):
+    has_crash_related_attachments: bool = False
+    has_stacktrace_attachment: bool = False
+    has_replication_video: bool = False
+    stacktrace_files: list[str] = Field(default_factory=list)
+    replication_videos: list[str] = Field(default_factory=list)
+    crash_related_files: list[str] = Field(default_factory=list)
+    signals: list[CrashAttachmentSignal] = Field(default_factory=list)
+
+
 class TicketTroubleAssessment(BaseModel):
     ticket_id: int
     ticket_url: str
@@ -340,6 +365,7 @@ class TicketTroubleAssessment(BaseModel):
     in_trouble: bool
     risk_score: int
     flags: list[TicketTroubleFlag]
+    crash_attachment_summary: CrashAttachmentSummary | None = None
 
 
 class ScanTicketsInTroubleResult(BaseModel):
@@ -382,6 +408,21 @@ CRASH_SIGNAL_TERMS = [
     "fatal exception",
     "segmentation fault",
 ]
+CRASH_ATTACHMENT_KEYWORDS = (
+    "crash",
+    "stacktrace",
+    "stack_trace",
+    "stack-trace",
+    "stack",
+    "backtrace",
+    "exception",
+    "fatal",
+    "anr",
+    "deobfuscat",
+    "deobfuscated",
+)
+VIDEO_ATTACHMENT_EXTENSIONS = (".mp4", ".mov", ".m4v", ".avi", ".webm", ".mkv")
+IMAGE_ATTACHMENT_EXTENSIONS = (".jpg", ".jpeg", ".png", ".heic", ".heif", ".gif", ".bmp", ".webp")
 
 
 def _parse_iso_datetime(value: str | None) -> datetime | None:
@@ -404,9 +445,90 @@ def _is_stacktrace_attachment_filename(file_name: str | None) -> bool:
     if not file_name:
         return False
     lowered = file_name.lower()
-    evidence_extensions = (".ips", ".crash", ".log", ".txt", ".dmp")
-    evidence_keywords = ("ips", "stacktrace", "stack")
-    return lowered.endswith(evidence_extensions) or any(keyword in lowered for keyword in evidence_keywords)
+    evidence_extensions = (".ips", ".crash", ".dmp")
+    evidence_keywords = (
+        "stacktrace",
+        "stack_trace",
+        "stack-trace",
+        "backtrace",
+        "deobfuscat",
+        "deobfuscated",
+        "crashlytics",
+    )
+    if lowered.endswith(evidence_extensions):
+        return True
+    if any(keyword in lowered for keyword in evidence_keywords):
+        return True
+    return lowered.endswith(".log") and any(keyword in lowered for keyword in ("crash", "stack", "fatal", "exception"))
+
+
+def _classify_crash_attachment(file_name: str | None, content_type: str | None) -> str | None:
+    lowered_name = str(file_name or "").lower()
+    lowered_content_type = str(content_type or "").lower()
+
+    is_video = lowered_name.endswith(VIDEO_ATTACHMENT_EXTENSIONS) or lowered_content_type.startswith("video/")
+    is_image = lowered_name.endswith(IMAGE_ATTACHMENT_EXTENSIONS) or lowered_content_type.startswith("image/")
+
+    if _is_stacktrace_attachment_filename(lowered_name):
+        return "stacktrace"
+    if is_video:
+        return "replication_video"
+    if lowered_name.endswith(".log") or " log" in lowered_name or "logs" in lowered_name:
+        return "crash_log"
+    if is_image and any(keyword in lowered_name for keyword in CRASH_ATTACHMENT_KEYWORDS):
+        return "crash_screenshot"
+    if is_image:
+        return "crash_screenshot"
+    if any(keyword in lowered_name for keyword in CRASH_ATTACHMENT_KEYWORDS):
+        return "crash_artifact"
+    return None
+
+
+def _comment_source(comment: dict[str, Any], requester_id: int | None) -> str:
+    if not bool(comment.get("public")):
+        return "internal_note"
+    if requester_id is not None and comment.get("author_id") == requester_id:
+        return "customer_public_comment"
+    return "agent_public_comment"
+
+
+def _build_crash_attachment_summary(comments: list[dict[str, Any]], requester_id: int | None) -> CrashAttachmentSummary:
+    signals: list[CrashAttachmentSignal] = []
+    stacktrace_files: list[str] = []
+    replication_videos: list[str] = []
+    crash_related_files: list[str] = []
+
+    for comment in comments:
+        for attachment in (comment.get("attachments") or []):
+            file_name = str(attachment.get("file_name") or "")
+            content_type = str(attachment.get("content_type") or "")
+            evidence_type = _classify_crash_attachment(file_name=file_name, content_type=content_type)
+            if evidence_type is None:
+                continue
+
+            signal = CrashAttachmentSignal(
+                file_name=file_name,
+                evidence_type=evidence_type,
+                source=_comment_source(comment, requester_id),
+                content_type=content_type or None,
+                size=attachment.get("size"),
+            )
+            signals.append(signal)
+            crash_related_files.append(file_name)
+            if evidence_type == "stacktrace":
+                stacktrace_files.append(file_name)
+            if evidence_type == "replication_video":
+                replication_videos.append(file_name)
+
+    return CrashAttachmentSummary(
+        has_crash_related_attachments=bool(signals),
+        has_stacktrace_attachment=bool(stacktrace_files),
+        has_replication_video=bool(replication_videos),
+        stacktrace_files=stacktrace_files,
+        replication_videos=replication_videos,
+        crash_related_files=crash_related_files,
+        signals=signals,
+    )
 
 
 def _is_title_structured(subject: str | None) -> bool:
@@ -457,6 +579,7 @@ def _build_ticket_trouble_assessment(
     custom_fields = ticket.get("custom_fields") if isinstance(ticket.get("custom_fields"), dict) else {}
 
     public_comments = [c for c in comments if c.get("public")]
+    crash_attachment_summary = _build_crash_attachment_summary(comments=comments, requester_id=requester_id)
     public_comments_sorted = sorted(
         public_comments,
         key=lambda c: _parse_iso_datetime(c.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc),
@@ -648,7 +771,11 @@ def _build_ticket_trouble_assessment(
 
             for attachment in attachments:
                 file_name = str(attachment.get("file_name") or "")
-                if _is_stacktrace_attachment_filename(file_name):
+                attachment_type = _classify_crash_attachment(
+                    file_name=file_name,
+                    content_type=attachment.get("content_type"),
+                )
+                if attachment_type in {"stacktrace", "crash_log", "crash_artifact"}:
                     has_stacktrace_evidence = True
                     break
 
@@ -700,6 +827,7 @@ def _build_ticket_trouble_assessment(
         in_trouble=bool(sorted_flags),
         risk_score=risk_score,
         flags=sorted_flags,
+        crash_attachment_summary=crash_attachment_summary,
     )
 
 
@@ -772,6 +900,24 @@ def get_ticket_summary(
         f"In Trouble: {'Yes' if assessment.in_trouble else 'No'}",
         f"Risk Score: {assessment.risk_score}",
     ]
+    crash_attachments = assessment.crash_attachment_summary
+    if crash_attachments is not None:
+        alert_lines.append(
+            f"Crash-related attachments available: {'Yes' if crash_attachments.has_crash_related_attachments else 'No'}"
+        )
+        stacktrace_files = ", ".join(crash_attachments.stacktrace_files) if crash_attachments.stacktrace_files else "Not found"
+        replication_videos = (
+            ", ".join(crash_attachments.replication_videos) if crash_attachments.replication_videos else "Not found"
+        )
+        other_files = [
+            file_name
+            for file_name in crash_attachments.crash_related_files
+            if file_name not in set(crash_attachments.stacktrace_files + crash_attachments.replication_videos)
+        ]
+        other_related = ", ".join(other_files) if other_files else "Not found"
+        alert_lines.append(f"Stacktrace attachments: {stacktrace_files}")
+        alert_lines.append(f"Replication path video: {replication_videos}")
+        alert_lines.append(f"Other crash-related attachments: {other_related}")
     if assessment.flags:
         alert_lines.append("Flags:")
         for flag in assessment.flags:
@@ -790,10 +936,12 @@ def review_ticket(
 ) -> str:
     ticket = _prepare_ticket_payload(ticket_id)
     comments = zendesk_client.get_ticket_comments(ticket_id)
+    attachment_summary = _build_crash_attachment_summary(comments=comments, requester_id=ticket.get("requester_id"))
     return build_ticket_analysis_input(
         ticket_id=ticket_id,
         ticket=ticket,
         comments=comments,
+        attachment_evidence_summary=attachment_summary.model_dump(),
         rubric=TICKET_ANALYSIS_TEMPLATE.format(ticket_id=ticket_id, ticket_link=_ticket_link(ticket_id)),
     )
 
@@ -1090,11 +1238,17 @@ def review_random_solved_tickets_for_agent(
         ticket_id = sampled_ticket.id
         if ticket_id is None:
             continue
+        ticket = _prepare_ticket_payload(ticket_id)
+        comments = zendesk_client.get_ticket_comments(ticket_id)
         reviews.append(
             {
                 "ticket_id": ticket_id,
-                "ticket": _prepare_ticket_payload(ticket_id),
-                "comments": zendesk_client.get_ticket_comments(ticket_id),
+                "ticket": ticket,
+                "comments": comments,
+                "attachment_evidence_summary": _build_crash_attachment_summary(
+                    comments=comments,
+                    requester_id=ticket.get("requester_id"),
+                ).model_dump(),
             }
         )
 

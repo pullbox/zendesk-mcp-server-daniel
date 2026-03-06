@@ -44,6 +44,7 @@ class TestTicketAnalysisInput(unittest.TestCase):
         self.assertEqual(payload["ticket"]["id"], 42265)
         self.assertEqual(payload["comments"][0]["author_id"], 10)
         self.assertEqual(payload["comments"][0]["attachments"][0]["file_name"], "crash.ips")
+        self.assertEqual(payload["attachment_evidence_summary"], {})
 
     def test_build_batch_ticket_review_input_embeds_multiple_reviews(self) -> None:
         text = build_batch_ticket_review_input(
@@ -76,6 +77,7 @@ class TestTicketAnalysisInput(unittest.TestCase):
         self.assertEqual(payload["reviews"][1]["comments"][0]["body"], "Two")
         self.assertEqual(payload["reviews"][0]["comments"][0]["attachments"][0]["file_name"], "android.log")
         self.assertEqual(payload["reviews"][0]["ticket_link"], "#100")
+        self.assertEqual(payload["reviews"][0]["attachment_evidence_summary"], {})
 
     def test_build_batch_ticket_review_input_supports_ticket_link_placeholder(self) -> None:
         text = build_batch_ticket_review_input(
@@ -96,6 +98,7 @@ class TestTicketAnalysisInput(unittest.TestCase):
         payload = json.loads(text.split("\n\n", 1)[1])
         self.assertEqual(payload["reviews"][0]["ticket_link"], "[300](https://example.zendesk.com/agent/tickets/300)")
         self.assertEqual(payload["reviews"][0]["rubric"], "Review ticket [300](https://example.zendesk.com/agent/tickets/300).")
+        self.assertEqual(payload["reviews"][0]["attachment_evidence_summary"], {})
 
 
 if __name__ == "__main__":

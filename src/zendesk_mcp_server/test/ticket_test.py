@@ -1000,6 +1000,10 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
 
         flag_codes = [flag.code for flag in assessment.flags]
         self.assertNotIn("crash_process_gap", flag_codes)
+        self.assertIsNotNone(assessment.crash_attachment_summary)
+        self.assertTrue(assessment.crash_attachment_summary.has_crash_related_attachments)
+        self.assertTrue(assessment.crash_attachment_summary.has_stacktrace_attachment)
+        self.assertIn("ios_stack_capture.bin", assessment.crash_attachment_summary.stacktrace_files)
 
     def test_ticket_with_crash_subject_and_missing_crash_tag_is_high_alert(self) -> None:
         with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
@@ -1135,6 +1139,7 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
         summary_text = response.root.content[0].text
         self.assertIn("## Trouble Scan", summary_text)
         self.assertIn("crash_tag_missing", summary_text)
+        self.assertIn("Crash-related attachments available:", summary_text)
         self.assertFalse(response.root.isError)
 
     def test_crash_ticket_non_matching_attachment_filename_still_flags_process_gap(self) -> None:
@@ -1176,6 +1181,9 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
 
         flag_codes = [flag.code for flag in assessment.flags]
         self.assertIn("crash_process_gap", flag_codes)
+        self.assertIsNotNone(assessment.crash_attachment_summary)
+        self.assertTrue(assessment.crash_attachment_summary.has_replication_video)
+        self.assertIn("screen_recording.mp4", assessment.crash_attachment_summary.replication_videos)
 
     def test_sample_solved_tickets_for_agent_is_deterministic_with_seed(self) -> None:
         client_payload = {

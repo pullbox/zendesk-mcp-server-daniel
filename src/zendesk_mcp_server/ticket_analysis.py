@@ -7,6 +7,7 @@ def build_ticket_analysis_input(
     ticket: dict[str, Any],
     comments: list[dict[str, Any]],
     rubric: str,
+    attachment_evidence_summary: dict[str, Any] | None = None,
 ) -> str:
     compact_comments = [
         {
@@ -33,6 +34,7 @@ def build_ticket_analysis_input(
         "ticket_id": ticket_id,
         "ticket": ticket,
         "comments": compact_comments,
+        "attachment_evidence_summary": attachment_evidence_summary or {},
     }
 
     return (
@@ -78,6 +80,7 @@ def build_batch_ticket_review_input(
                     }
                     for comment in review["comments"]
                 ],
+                "attachment_evidence_summary": review.get("attachment_evidence_summary") or {},
             }
         )
 
