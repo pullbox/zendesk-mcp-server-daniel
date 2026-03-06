@@ -36,6 +36,7 @@ ZENDESK_TICKET_LINK_BASE_URL = os.getenv(
     "ZENDESK_TICKET_LINK_BASE_URL",
     "https://appdomesupport.zendesk.com/agent/tickets",
 )
+EST_TIMEZONE = timezone(timedelta(hours=-5), name="EST")
 
 
 TITLE_REVIEW_POLICY_TEMPLATE = """
@@ -197,8 +198,8 @@ def _format_display_datetime(value: str | None) -> str:
         return "N/A"
     try:
         dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        dt = dt.astimezone(timezone.utc)
-        return dt.strftime("%B %-d, %Y at %H:%M UTC")
+        dt = dt.astimezone(EST_TIMEZONE)
+        return dt.strftime("%B %-d, %Y at %H:%M EST")
     except ValueError:
         return value
 
