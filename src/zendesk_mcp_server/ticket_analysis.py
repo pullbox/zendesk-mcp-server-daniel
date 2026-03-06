@@ -50,10 +50,13 @@ def build_batch_ticket_review_input(
     batches = []
     for review in reviews:
         ticket_id = review["ticket_id"]
+        ticket_payload = review["ticket"] if isinstance(review.get("ticket"), dict) else {}
+        ticket_link = ticket_payload.get("ticket_link") or f"#{ticket_id}"
         batches.append(
             {
                 "ticket_id": ticket_id,
-                "rubric": rubric_template.format(ticket_id=ticket_id).strip(),
+                "ticket_link": ticket_link,
+                "rubric": rubric_template.format(ticket_id=ticket_id, ticket_link=ticket_link).strip(),
                 "ticket": review["ticket"],
                 "comments": [
                     {

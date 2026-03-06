@@ -2032,3 +2032,151 @@
 2026-03-05 17:08:47,140 - INFO - Fetching Zendesk ticket field options for field 11068759378973
 2026-03-05 17:08:47,698 - INFO - Fetched Zendesk ticket field options for field 11068759378973 successfully
 2026-03-05 17:08:47,698 - INFO - Loaded ticket field option maps for 4 relevant fields
+2026-03-05 17:11:08,062 - INFO - zendesk mcp server started
+2026-03-05 17:11:08,065 - INFO - Fetching Zendesk ticket field definitions
+2026-03-05 17:11:08,473 - INFO - Fetched Zendesk ticket field definitions successfully
+2026-03-05 17:11:08,473 - INFO - Fetching Zendesk ticket field options for field 25497966
+2026-03-05 17:11:08,932 - INFO - Fetched Zendesk ticket field options for field 25497966 successfully
+2026-03-05 17:11:08,932 - INFO - Fetching Zendesk ticket field options for field 360038406752
+2026-03-05 17:11:09,148 - INFO - Fetched Zendesk ticket field options for field 360038406752 successfully
+2026-03-05 17:11:09,148 - INFO - Fetching Zendesk ticket field options for field 4415622115985
+2026-03-05 17:11:09,912 - INFO - Fetched Zendesk ticket field options for field 4415622115985 successfully
+2026-03-05 17:11:09,912 - INFO - Fetching Zendesk ticket field options for field 11068759378973
+2026-03-05 17:11:10,135 - INFO - Fetched Zendesk ticket field options for field 11068759378973 successfully
+2026-03-05 17:11:10,135 - INFO - Loaded ticket field option maps for 4 relevant fields
+2026-03-05 17:11:10,174 - INFO - Processing request of type ListToolsRequest
+2026-03-05 17:11:10,175 - INFO - Processing request of type ListPromptsRequest
+2026-03-05 17:11:10,176 - INFO - Processing request of type ListResourcesRequest
+2026-03-05 17:11:44,275 - INFO - Processing request of type CallToolRequest
+2026-03-05 17:11:44,277 - INFO - Fetching Zendesk ticket 42484
+2026-03-05 17:11:44,531 - INFO - Fetching Zendesk ticket fields
+2026-03-05 17:11:44,855 - INFO - Fetched Zendesk ticket fields successfully
+2026-03-05 17:11:44,856 - INFO - Fetched Zendesk ticket 42484 successfully
+2026-03-05 17:11:44,856 - INFO - Fetching Zendesk comments for ticket 42484
+2026-03-05 17:11:45,465 - INFO - Fetched 34 Zendesk comments for ticket 42484
+2026-03-05 17:18:20,403 - INFO - zendesk mcp server started
+2026-03-05 17:18:20,406 - INFO - Fetching Zendesk ticket field definitions
+2026-03-05 17:18:20,421 - ERROR - Failed to get Zendesk ticket field definitions: <urlopen error [Errno 8] nodename nor servname provided, or not known>
+2026-03-05 17:18:20,422 - WARNING - Failed to load ticket field definitions: Failed to get ticket field definitions: <urlopen error [Errno 8] nodename nor servname provided, or not known>
+2026-03-05 17:18:23,688 - INFO - Fetching Zendesk comments for ticket 777
+2026-03-05 17:18:23,689 - INFO - Fetched 1 Zendesk comments for ticket 777
+2026-03-05 17:18:23,690 - INFO - Fetching Zendesk ticket 777
+2026-03-05 17:18:23,691 - INFO - Fetched Zendesk ticket 777 successfully
+2026-03-05 17:18:23,692 - INFO - Fetching Zendesk tickets from search API: https://example.zendesk.com/api/v2/search.json?query=type%3Aticket+created%3E2026-03-02T11%3A30%3A00%2B00%3A00&page=1&per_page=25&sort_by=created_at&sort_order=desc
+2026-03-05 17:18:23,692 - INFO - Zendesk search query: type:ticket created>2026-03-02T11:30:00+00:00
+2026-03-05 17:18:23,693 - INFO - Fetched 1 raw search results from Zendesk
+2026-03-05 17:18:23,694 - INFO - Fetching Zendesk tickets from search API: https://example.zendesk.com/api/v2/search.json?query=type%3Aticket+updated%3E2026-03-02T10%3A30%3A00%2B00%3A00&page=1&per_page=25&sort_by=created_at&sort_order=desc
+2026-03-05 17:18:23,694 - INFO - Zendesk search query: type:ticket updated>2026-03-02T10:30:00+00:00
+2026-03-05 17:18:23,695 - INFO - Fetched 2 raw search results from Zendesk
+2026-03-05 17:18:23,696 - INFO - Fetching Zendesk tickets from search API: https://example.zendesk.com/api/v2/search.json?query=type%3Aticket+status%3Csolved+-tags%3Ainternal+updated%3C2026-02-25T15%3A30%3A00%2B00%3A00&page=1&per_page=25&sort_by=created_at&sort_order=desc
+2026-03-05 17:18:23,696 - INFO - Zendesk search query: type:ticket status<solved -tags:internal updated<2026-02-25T15:30:00+00:00
+2026-03-05 17:18:23,697 - INFO - Fetched 1 raw search results from Zendesk
+2026-03-05 17:18:23,698 - INFO - Fetching solved-ticket search page 1: https://example.zendesk.com/api/v2/search.json?query=type%3Aticket+status%3Asolved+solved%3E%3D2026-02-01+solved%3C2026-03-01+assignee%3A%22pedro%22&page=1&per_page=100&sort_by=created_at&sort_order=desc
+2026-03-05 17:18:23,699 - INFO - Fetching solved-ticket search page 1: https://example.zendesk.com/api/v2/search.json?query=type%3Aticket+status%3Asolved+solved%3E%3D2026-02-01+solved%3C2026-03-01+assignee%3A%22pedro%22&page=1&per_page=100&sort_by=created_at&sort_order=desc
+2026-03-05 17:18:23,700 - INFO - Searching tickets by text via search API: https://example.zendesk.com/api/v2/search.json?query=type%3Aticket+%22Facephi%22+organization%3A%22Acme%22+updated%3E2026-03-01+updated%3C2026-03-04+status%3Aopen+-tags%3Ainternal+commenter%3A%22Tom%22&page=2&per_page=25&sort_by=updated_at&sort_order=desc
+2026-03-05 17:18:23,702 - INFO - Searching tickets by text via search API: https://example.zendesk.com/api/v2/search.json?query=type%3Aticket+%22Facephi%22&page=1&per_page=25&sort_by=updated_at&sort_order=desc
+2026-03-05 17:18:23,703 - INFO - Searching tickets by text via search API: https://example.zendesk.com/api/v2/search.json?query=type%3Aticket+%22Facephi%22+status%3Csolved&page=1&per_page=25&sort_by=updated_at&sort_order=desc
+2026-03-05 17:18:23,705 - INFO - zendesk mcp server started
+2026-03-05 17:18:23,707 - INFO - Fetching Zendesk ticket field definitions
+2026-03-05 17:18:23,719 - ERROR - Failed to get Zendesk ticket field definitions: <urlopen error [Errno 8] nodename nor servname provided, or not known>
+2026-03-05 17:18:23,719 - WARNING - Failed to load ticket field definitions: Failed to get ticket field definitions: <urlopen error [Errno 8] nodename nor servname provided, or not known>
+2026-03-05 17:19:51,037 - INFO - zendesk mcp server started
+2026-03-05 17:19:51,041 - INFO - Fetching Zendesk ticket field definitions
+2026-03-05 17:19:51,728 - INFO - Fetched Zendesk ticket field definitions successfully
+2026-03-05 17:19:51,728 - INFO - Fetching Zendesk ticket field options for field 25497966
+2026-03-05 17:19:51,948 - INFO - Fetched Zendesk ticket field options for field 25497966 successfully
+2026-03-05 17:19:51,949 - INFO - Fetching Zendesk ticket field options for field 360038406752
+2026-03-05 17:19:52,177 - INFO - Fetched Zendesk ticket field options for field 360038406752 successfully
+2026-03-05 17:19:52,177 - INFO - Fetching Zendesk ticket field options for field 4415622115985
+2026-03-05 17:19:52,703 - INFO - Fetched Zendesk ticket field options for field 4415622115985 successfully
+2026-03-05 17:19:52,704 - INFO - Fetching Zendesk ticket field options for field 11068759378973
+2026-03-05 17:19:52,923 - INFO - Fetched Zendesk ticket field options for field 11068759378973 successfully
+2026-03-05 17:19:52,923 - INFO - Loaded ticket field option maps for 4 relevant fields
+2026-03-05 17:19:53,611 - INFO - zendesk mcp server started
+2026-03-05 17:19:53,617 - INFO - Fetching Zendesk ticket field definitions
+2026-03-05 17:19:54,305 - INFO - Fetched Zendesk ticket field definitions successfully
+2026-03-05 17:19:54,305 - INFO - Fetching Zendesk ticket field options for field 25497966
+2026-03-05 17:19:55,086 - INFO - Fetched Zendesk ticket field options for field 25497966 successfully
+2026-03-05 17:19:55,087 - INFO - Fetching Zendesk ticket field options for field 360038406752
+2026-03-05 17:19:55,306 - INFO - Fetched Zendesk ticket field options for field 360038406752 successfully
+2026-03-05 17:19:55,306 - INFO - Fetching Zendesk ticket field options for field 4415622115985
+2026-03-05 17:19:55,802 - INFO - Fetched Zendesk ticket field options for field 4415622115985 successfully
+2026-03-05 17:19:55,802 - INFO - Fetching Zendesk ticket field options for field 11068759378973
+2026-03-05 17:19:56,273 - INFO - Fetched Zendesk ticket field options for field 11068759378973 successfully
+2026-03-05 17:19:56,273 - INFO - Loaded ticket field option maps for 4 relevant fields
+2026-03-05 17:19:56,308 - INFO - Processing request of type ListToolsRequest
+2026-03-05 17:19:56,309 - INFO - Processing request of type ListPromptsRequest
+2026-03-05 17:19:56,309 - INFO - Processing request of type ListResourcesRequest
+2026-03-05 17:26:38,245 - INFO - zendesk mcp server started
+2026-03-05 17:26:38,248 - INFO - Fetching Zendesk ticket field definitions
+2026-03-05 17:26:38,262 - ERROR - Failed to get Zendesk ticket field definitions: <urlopen error [Errno 8] nodename nor servname provided, or not known>
+2026-03-05 17:26:38,262 - WARNING - Failed to load ticket field definitions: Failed to get ticket field definitions: <urlopen error [Errno 8] nodename nor servname provided, or not known>
+2026-03-05 17:27:46,564 - INFO - zendesk mcp server started
+2026-03-05 17:27:46,567 - INFO - Fetching Zendesk ticket field definitions
+2026-03-05 17:27:46,932 - INFO - Fetched Zendesk ticket field definitions successfully
+2026-03-05 17:27:46,932 - INFO - Fetching Zendesk ticket field options for field 25497966
+2026-03-05 17:27:47,401 - INFO - Fetched Zendesk ticket field options for field 25497966 successfully
+2026-03-05 17:27:47,402 - INFO - Fetching Zendesk ticket field options for field 360038406752
+2026-03-05 17:27:47,631 - INFO - Fetched Zendesk ticket field options for field 360038406752 successfully
+2026-03-05 17:27:47,632 - INFO - Fetching Zendesk ticket field options for field 4415622115985
+2026-03-05 17:27:47,873 - INFO - Fetched Zendesk ticket field options for field 4415622115985 successfully
+2026-03-05 17:27:47,873 - INFO - Fetching Zendesk ticket field options for field 11068759378973
+2026-03-05 17:27:48,110 - INFO - Fetched Zendesk ticket field options for field 11068759378973 successfully
+2026-03-05 17:27:48,111 - INFO - Loaded ticket field option maps for 4 relevant fields
+2026-03-05 17:27:48,148 - INFO - Processing request of type ListToolsRequest
+2026-03-05 17:27:48,150 - INFO - Processing request of type ListPromptsRequest
+2026-03-05 17:27:48,150 - INFO - Processing request of type ListResourcesRequest
+2026-03-05 17:29:02,966 - INFO - Processing request of type CallToolRequest
+2026-03-05 17:29:02,968 - INFO - Fetching Zendesk ticket 42484
+2026-03-05 17:29:03,246 - INFO - Fetching Zendesk ticket fields
+2026-03-05 17:29:04,238 - INFO - Fetched Zendesk ticket fields successfully
+2026-03-05 17:29:04,238 - INFO - Fetched Zendesk ticket 42484 successfully
+2026-03-05 17:29:04,239 - INFO - Fetching Zendesk comments for ticket 42484
+2026-03-05 17:29:04,736 - INFO - Fetched 34 Zendesk comments for ticket 42484
+2026-03-05 17:31:25,769 - INFO - Fetching Zendesk comments for ticket 777
+2026-03-05 17:31:25,770 - INFO - Fetched 1 Zendesk comments for ticket 777
+2026-03-05 17:31:25,771 - INFO - Fetching Zendesk ticket 777
+2026-03-05 17:31:25,772 - INFO - Fetched Zendesk ticket 777 successfully
+2026-03-05 17:31:25,773 - INFO - Fetching Zendesk tickets from search API: https://example.zendesk.com/api/v2/search.json?query=type%3Aticket+created%3E2026-03-02T11%3A30%3A00%2B00%3A00&page=1&per_page=25&sort_by=created_at&sort_order=desc
+2026-03-05 17:31:25,773 - INFO - Zendesk search query: type:ticket created>2026-03-02T11:30:00+00:00
+2026-03-05 17:31:25,774 - INFO - Fetched 1 raw search results from Zendesk
+2026-03-05 17:31:25,775 - INFO - Fetching Zendesk tickets from search API: https://example.zendesk.com/api/v2/search.json?query=type%3Aticket+updated%3E2026-03-02T10%3A30%3A00%2B00%3A00&page=1&per_page=25&sort_by=created_at&sort_order=desc
+2026-03-05 17:31:25,775 - INFO - Zendesk search query: type:ticket updated>2026-03-02T10:30:00+00:00
+2026-03-05 17:31:25,776 - INFO - Fetched 2 raw search results from Zendesk
+2026-03-05 17:31:25,776 - INFO - Fetching Zendesk tickets from search API: https://example.zendesk.com/api/v2/search.json?query=type%3Aticket+status%3Csolved+-tags%3Ainternal+updated%3C2026-02-25T15%3A30%3A00%2B00%3A00&page=1&per_page=25&sort_by=created_at&sort_order=desc
+2026-03-05 17:31:25,777 - INFO - Zendesk search query: type:ticket status<solved -tags:internal updated<2026-02-25T15:30:00+00:00
+2026-03-05 17:31:25,777 - INFO - Fetched 1 raw search results from Zendesk
+2026-03-05 17:31:25,778 - INFO - Fetching solved-ticket search page 1: https://example.zendesk.com/api/v2/search.json?query=type%3Aticket+status%3Asolved+solved%3E%3D2026-02-01+solved%3C2026-03-01+assignee%3A%22pedro%22&page=1&per_page=100&sort_by=created_at&sort_order=desc
+2026-03-05 17:31:25,779 - INFO - Fetching solved-ticket search page 1: https://example.zendesk.com/api/v2/search.json?query=type%3Aticket+status%3Asolved+solved%3E%3D2026-02-01+solved%3C2026-03-01+assignee%3A%22pedro%22&page=1&per_page=100&sort_by=created_at&sort_order=desc
+2026-03-05 17:31:25,780 - INFO - Searching tickets by text via search API: https://example.zendesk.com/api/v2/search.json?query=type%3Aticket+%22Facephi%22+organization%3A%22Acme%22+updated%3E2026-03-01+updated%3C2026-03-04+status%3Aopen+-tags%3Ainternal+commenter%3A%22Tom%22&page=2&per_page=25&sort_by=updated_at&sort_order=desc
+2026-03-05 17:31:25,782 - INFO - Searching tickets by text via search API: https://example.zendesk.com/api/v2/search.json?query=type%3Aticket+%22Facephi%22&page=1&per_page=25&sort_by=updated_at&sort_order=desc
+2026-03-05 17:31:25,784 - INFO - Searching tickets by text via search API: https://example.zendesk.com/api/v2/search.json?query=type%3Aticket+%22Facephi%22+status%3Csolved&page=1&per_page=25&sort_by=updated_at&sort_order=desc
+2026-03-05 17:31:25,790 - INFO - zendesk mcp server started
+2026-03-05 17:31:25,792 - INFO - Fetching Zendesk ticket field definitions
+2026-03-05 17:31:25,805 - ERROR - Failed to get Zendesk ticket field definitions: <urlopen error [Errno 8] nodename nor servname provided, or not known>
+2026-03-05 17:31:25,806 - WARNING - Failed to load ticket field definitions: Failed to get ticket field definitions: <urlopen error [Errno 8] nodename nor servname provided, or not known>
+2026-03-05 17:44:55,187 - INFO - zendesk mcp server started
+2026-03-05 17:44:55,190 - INFO - Fetching Zendesk ticket field definitions
+2026-03-05 17:44:56,225 - INFO - Fetched Zendesk ticket field definitions successfully
+2026-03-05 17:44:56,225 - INFO - Fetching Zendesk ticket field options for field 25497966
+2026-03-05 17:44:56,976 - INFO - Fetched Zendesk ticket field options for field 25497966 successfully
+2026-03-05 17:44:56,976 - INFO - Fetching Zendesk ticket field options for field 360038406752
+2026-03-05 17:44:57,529 - INFO - Fetched Zendesk ticket field options for field 360038406752 successfully
+2026-03-05 17:44:57,529 - INFO - Fetching Zendesk ticket field options for field 4415622115985
+2026-03-05 17:44:58,113 - INFO - Fetched Zendesk ticket field options for field 4415622115985 successfully
+2026-03-05 17:44:58,114 - INFO - Fetching Zendesk ticket field options for field 11068759378973
+2026-03-05 17:44:58,322 - INFO - Fetched Zendesk ticket field options for field 11068759378973 successfully
+2026-03-05 17:44:58,322 - INFO - Loaded ticket field option maps for 4 relevant fields
+2026-03-05 17:44:58,369 - INFO - Processing request of type ListToolsRequest
+2026-03-05 17:44:58,370 - INFO - Processing request of type ListPromptsRequest
+2026-03-05 17:44:58,371 - INFO - Processing request of type ListResourcesRequest
+2026-03-05 19:25:03,401 - INFO - Processing request of type CallToolRequest
+2026-03-05 19:25:03,418 - INFO - Fetching Zendesk ticket 42484
+2026-03-05 19:25:04,446 - INFO - Fetching Zendesk ticket fields
+2026-03-05 19:25:05,616 - INFO - Fetched Zendesk ticket fields successfully
+2026-03-05 19:25:05,616 - INFO - Fetched Zendesk ticket 42484 successfully
+2026-03-05 19:25:05,618 - INFO - Fetching Zendesk comments for ticket 42484
+2026-03-05 19:25:06,793 - INFO - Fetched 34 Zendesk comments for ticket 42484
+2026-03-05 19:26:57,987 - INFO - Processing request of type CallToolRequest
+2026-03-05 19:26:57,993 - INFO - Fetching Zendesk comments for ticket 42484
+2026-03-05 19:26:59,326 - INFO - Fetched 34 Zendesk comments for ticket 42484

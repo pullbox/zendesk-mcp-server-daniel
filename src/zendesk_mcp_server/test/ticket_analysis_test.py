@@ -75,6 +75,27 @@ class TestTicketAnalysisInput(unittest.TestCase):
         self.assertEqual(payload["reviews"][0]["rubric"], "Review ticket #100.")
         self.assertEqual(payload["reviews"][1]["comments"][0]["body"], "Two")
         self.assertEqual(payload["reviews"][0]["comments"][0]["attachments"][0]["file_name"], "android.log")
+        self.assertEqual(payload["reviews"][0]["ticket_link"], "#100")
+
+    def test_build_batch_ticket_review_input_supports_ticket_link_placeholder(self) -> None:
+        text = build_batch_ticket_review_input(
+            reviews=[
+                {
+                    "ticket_id": 300,
+                    "ticket": {
+                        "id": 300,
+                        "subject": "Third",
+                        "ticket_link": "[300](https://example.zendesk.com/agent/tickets/300)",
+                    },
+                    "comments": [],
+                }
+            ],
+            rubric_template="Review ticket {ticket_link}.",
+        )
+
+        payload = json.loads(text.split("\n\n", 1)[1])
+        self.assertEqual(payload["reviews"][0]["ticket_link"], "[300](https://example.zendesk.com/agent/tickets/300)")
+        self.assertEqual(payload["reviews"][0]["rubric"], "Review ticket [300](https://example.zendesk.com/agent/tickets/300).")
 
 
 if __name__ == "__main__":

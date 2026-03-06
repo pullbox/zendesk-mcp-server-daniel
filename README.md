@@ -125,6 +125,7 @@ Returns a full review packet:
 Review rubric now requires reporting escalation timing, including:
 - `Time to escalation from ticket creation`
 - for `crash_detected` tickets, explicit escalation-latency reporting (or `Not found` + process gap if timestamp is missing)
+- for `crash_detected` tickets, missing crash identification, missing stacktrace handling, or untimely/unverifiable escalation are hard-fail conditions that require a compliance score of `0`
 
 ### get_tickets
 

@@ -79,7 +79,7 @@ Summary: <count valid> valid, <count invalid> invalid
 """
 
 REVIEW_SINGLE_TICKET_TEMPLATE = """
-Use the ticket title review policy to review Zendesk ticket #{ticket_id}.
+Use the ticket title review policy to review Zendesk ticket {ticket_link}.
 
 Instructions:
 - Fetch the ticket first.
@@ -89,7 +89,7 @@ Instructions:
 """
 
 TICKET_ANALYSIS_TEMPLATE = """
-You are reviewing Zendesk ticket #{ticket_id} for internal support QA.
+You are reviewing Zendesk ticket {ticket_link} for internal support QA.
 
 Use only the ticket details and ticket comments as evidence. Do not infer or invent facts that are not explicitly present in the ticket data. If a milestone or detail cannot be found, write "Not found".
 
@@ -136,14 +136,18 @@ Rules:
 - If a crash_detected ticket has no stacktrace evidence, verify the assigned support engineer asked the customer for stacktrace/crash log details. If no such request appears in comments, flag this as a process gap.
 - For crash_detected tickets, enforce stacktrace request timeliness: if stacktrace evidence is not already present, the first explicit support request for stacktrace/crash logs should occur within 1 hour of crash identification.
 - For this check, infer crash identification time from the earliest explicit crash evidence in the ticket/comments; if the ticket already has tag "crash_detected", use ticket created timestamp when no earlier signal is available.
-- If the first stacktrace request is more than 1 hour after crash identification, explicitly flag "Late stacktrace request (>1h)" in Process Review and reduce the Compliance Score.
+- If the first stacktrace request is more than 1 hour after crash identification, explicitly flag "Late stacktrace request (>1h)" in Process Review.
 - For crash_detected tickets, always calculate and report "Time to escalation from ticket creation" using ticket created timestamp and the first explicit escalation timestamp in the evidence.
 - If escalation evidence exists but no escalation timestamp can be determined, write "Not found" and explicitly flag this as a process gap.
+- For crash_detected tickets, if there is evidence of a crash but the review does not explicitly identify crash handling in Timeline/Process Review, this is a critical miss and the Compliance Score must be 0.
+- For crash_detected tickets, if there is no stacktrace evidence and no explicit stacktrace/crash-log request, the Compliance Score must be 0.
+- For crash_detected tickets, if the first stacktrace/crash-log request is more than 1 hour after crash identification, the Compliance Score must be 0.
+- For crash_detected tickets, escalation must be timely: if first escalation occurs more than 1 hour after crash identification (or cannot be verified due to missing timestamp), the Compliance Score must be 0.
 - Prefer concise, evidence-based statements.
 """
 
 COMMENT_DRAFT_TEMPLATE = """
-You are a helpful Zendesk support agent. You need to draft a response to ticket #{ticket_id}.
+You are a helpful Zendesk support agent. You need to draft a response to ticket {ticket_link}.
 
 Please fetch the ticket info, comments and knowledge base to draft a professional and helpful response that:
 1. Acknowledges the customer's concern
@@ -162,6 +166,8 @@ ticket_field_option_resolver.load()
 def _prepare_ticket_payload(ticket_id: int) -> dict[str, Any]:
     ticket = zendesk_client.get_ticket(ticket_id)
     ticket = apply_ticket_field_displays(ticket, ticket_field_option_resolver)
+    ticket["ticket_url"] = _ticket_url(ticket_id)
+    ticket["ticket_link"] = _ticket_link(ticket_id)
     return ticket
 
 
@@ -343,9 +349,13 @@ class ScanTicketsInTroubleResult(BaseModel):
     tickets: list[TicketTroubleAssessment]
 
 
+DEFAULT_INITIAL_RESPONSE_SLA_MINUTES = 60
+DEFAULT_HIGH_PRIORITY_STALE_HOURS = 8
+
 TROUBLE_FLAG_WEIGHTS: dict[str, int] = {
     "missing_initial_response": 34,
     "crash_process_gap": 45,
+    "crash_tag_missing": 50,
     "status_fields_incomplete": 24,
     "customer_comment_no_response": 30,
     "solved_without_customer_confirmation": 10,
@@ -360,6 +370,18 @@ CUSTOMER_FOLLOW_UP_SLA_HOURS = 4
 CUSTOMER_FOLLOW_UP_PRIORITIES = {"low", "normal"}
 NO_RESPONSE_EXPECTED_OPEN_STALE_DAYS = 5
 OPEN_TICKET_STATUSES = {"new", "open", "pending", "hold", "on-hold"}
+CRASH_SIGNAL_TERMS = [
+    "crash",
+    "crashed",
+    "crashing",
+    "force close",
+    "force-close",
+    "unexpectedly close",
+    "unexpectedly closes",
+    "unexpectedly closed",
+    "fatal exception",
+    "segmentation fault",
+]
 
 
 def _parse_iso_datetime(value: str | None) -> datetime | None:
@@ -376,6 +398,15 @@ def _contains_any(text: str | None, terms: list[str]) -> bool:
         return False
     lowered = text.lower()
     return any(term in lowered for term in terms)
+
+
+def _is_stacktrace_attachment_filename(file_name: str | None) -> bool:
+    if not file_name:
+        return False
+    lowered = file_name.lower()
+    evidence_extensions = (".ips", ".crash", ".log", ".txt", ".dmp")
+    evidence_keywords = ("ips", "stacktrace", "stack")
+    return lowered.endswith(evidence_extensions) or any(keyword in lowered for keyword in evidence_keywords)
 
 
 def _is_title_structured(subject: str | None) -> bool:
@@ -402,6 +433,10 @@ def _is_no_response_expected_comment(comment: dict[str, Any]) -> bool:
     return any(term in text for term in no_response_expected_terms)
 
 
+def _mentions_crash_in_ticket_text(subject: str | None, description: str | None) -> bool:
+    return _contains_any(subject, CRASH_SIGNAL_TERMS) or _contains_any(description, CRASH_SIGNAL_TERMS)
+
+
 def _build_ticket_trouble_assessment(
     ticket: dict[str, Any],
     comments: list[dict[str, Any]],
@@ -412,6 +447,7 @@ def _build_ticket_trouble_assessment(
 
     ticket_id = int(ticket.get("id"))
     subject = ticket.get("subject")
+    description = ticket.get("description")
     status = ticket.get("status")
     priority = ticket.get("priority")
     requester_id = ticket.get("requester_id")
@@ -425,6 +461,18 @@ def _build_ticket_trouble_assessment(
         public_comments,
         key=lambda c: _parse_iso_datetime(c.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc),
     )
+
+    if "crash_detected" not in tags and _mentions_crash_in_ticket_text(subject, description):
+        flags.append(
+            TicketTroubleFlag(
+                code="crash_tag_missing",
+                severity="high",
+                message=(
+                    "Ticket subject/description indicates a crash, but missing required "
+                    "'crash_detected' tag."
+                ),
+            )
+        )
 
     if not _is_title_structured(subject):
         flags.append(
@@ -584,7 +632,6 @@ def _build_ticket_trouble_assessment(
             )
 
     if "crash_detected" in tags:
-        evidence_extensions = (".ips", ".crash", ".log", ".txt", ".dmp")
         evidence_terms = ["stacktrace", "stack trace", "backtrace", "crash log", "exception"]
         request_terms = ["send stacktrace", "share stacktrace", "provide stacktrace", "crash log", "stack trace"]
 
@@ -600,8 +647,8 @@ def _build_ticket_trouble_assessment(
                 has_stacktrace_evidence = True
 
             for attachment in attachments:
-                file_name = str(attachment.get("file_name") or "").lower()
-                if file_name.endswith(evidence_extensions):
+                file_name = str(attachment.get("file_name") or "")
+                if _is_stacktrace_attachment_filename(file_name):
                     has_stacktrace_evidence = True
                     break
 
@@ -660,7 +707,7 @@ def _build_ticket_trouble_assessment(
 def analyze_ticket_prompt(
     ticket_id: Annotated[int, Field(description="The ID of the ticket to analyze")],
 ) -> str:
-    return TICKET_ANALYSIS_TEMPLATE.format(ticket_id=ticket_id).strip()
+    return TICKET_ANALYSIS_TEMPLATE.format(ticket_id=ticket_id, ticket_link=_ticket_link(ticket_id)).strip()
 
 
 @mcp.prompt(
@@ -685,14 +732,14 @@ def review_ticket_title_prompt(
     return (
         TITLE_REVIEW_POLICY_TEMPLATE.strip()
         + "\n\n"
-        + REVIEW_SINGLE_TICKET_TEMPLATE.format(ticket_id=ticket_id).strip()
+        + REVIEW_SINGLE_TICKET_TEMPLATE.format(ticket_id=ticket_id, ticket_link=_ticket_link(ticket_id)).strip()
     )
 
 
 def draft_ticket_response_prompt(
     ticket_id: Annotated[int, Field(description="The ID of the ticket to respond to")],
 ) -> str:
-    return COMMENT_DRAFT_TEMPLATE.format(ticket_id=ticket_id).strip()
+    return COMMENT_DRAFT_TEMPLATE.format(ticket_id=ticket_id, ticket_link=_ticket_link(ticket_id)).strip()
 
 
 @mcp.tool(name="get_ticket", description="Retrieve a Zendesk ticket by its ID")
@@ -711,7 +758,27 @@ def get_ticket_summary(
     ticket_id: Annotated[int, Field(description="The ID of the ticket to summarize")],
 ) -> str:
     ticket = _prepare_ticket_payload(ticket_id)
-    return _build_ticket_summary(ticket)
+    comments = zendesk_client.get_ticket_comments(ticket_id)
+    assessment = _build_ticket_trouble_assessment(
+        ticket=ticket,
+        comments=comments,
+        initial_response_sla_minutes=DEFAULT_INITIAL_RESPONSE_SLA_MINUTES,
+        high_priority_stale_hours=DEFAULT_HIGH_PRIORITY_STALE_HOURS,
+    )
+    summary = _build_ticket_summary(ticket)
+    alert_lines = [
+        "",
+        "## Trouble Scan",
+        f"In Trouble: {'Yes' if assessment.in_trouble else 'No'}",
+        f"Risk Score: {assessment.risk_score}",
+    ]
+    if assessment.flags:
+        alert_lines.append("Flags:")
+        for flag in assessment.flags:
+            alert_lines.append(f"- [{flag.severity.upper()}] {flag.code}: {flag.message}")
+    else:
+        alert_lines.append("Flags: none")
+    return "\n".join([summary, *alert_lines])
 
 
 @mcp.tool(
@@ -727,7 +794,7 @@ def review_ticket(
         ticket_id=ticket_id,
         ticket=ticket,
         comments=comments,
-        rubric=TICKET_ANALYSIS_TEMPLATE.format(ticket_id=ticket_id),
+        rubric=TICKET_ANALYSIS_TEMPLATE.format(ticket_id=ticket_id, ticket_link=_ticket_link(ticket_id)),
     )
 
 
@@ -839,11 +906,11 @@ def scan_tickets_in_trouble(
     initial_response_sla_minutes: Annotated[
         int,
         Field(description="SLA threshold for first public agent response in minutes."),
-    ] = 60,
+    ] = DEFAULT_INITIAL_RESPONSE_SLA_MINUTES,
     high_priority_stale_hours: Annotated[
         int,
         Field(description="Threshold for stale high-priority tickets in hours."),
-    ] = 8,
+    ] = DEFAULT_HIGH_PRIORITY_STALE_HOURS,
 ) -> ScanTicketsInTroubleResult:
     list_result = zendesk_client.get_tickets(
         page=1,

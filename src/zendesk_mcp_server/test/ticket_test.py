@@ -421,6 +421,27 @@ class TestGetTicketsLastFiveHours(unittest.TestCase):
 
 
 class TestServerGetTicketsLastFiveHours(unittest.TestCase):
+    def test_prepare_ticket_payload_adds_ticket_link_fields(self) -> None:
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        with (
+            patch.object(server_module, "zendesk_client") as mock_client,
+            patch.object(
+                server_module,
+                "apply_ticket_field_displays",
+                side_effect=lambda ticket, _resolver: ticket,
+            ),
+        ):
+            mock_client.get_ticket.return_value = {
+                "id": 42484,
+                "subject": "ACME | iOS | Crash",
+            }
+            payload = server_module._prepare_ticket_payload(42484)
+
+        self.assertEqual(payload["ticket_url"], "https://appdomesupport.zendesk.com/agent/tickets/42484")
+        self.assertEqual(payload["ticket_link"], "[42484](https://appdomesupport.zendesk.com/agent/tickets/42484)")
+
     def test_get_tickets_tool_emits_structured_content(self) -> None:
         client_payload = {
             "tickets": [{"id": 101, "subject": "New billing issue"}],
@@ -939,6 +960,222 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
         flag_codes = [flag["code"] for flag in structured["tickets"][0]["flags"]]
         self.assertIn("customer_comment_no_response", flag_codes)
         self.assertFalse(response.root.isError)
+
+    def test_crash_ticket_attachment_filename_keyword_counts_as_stacktrace_evidence(self) -> None:
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        ticket = {
+            "id": 9901,
+            "subject": "ACME | iOS | Crash after launch",
+            "status": "open",
+            "priority": "high",
+            "created_at": "2026-03-05T10:00:00Z",
+            "updated_at": "2026-03-05T10:30:00Z",
+            "requester_id": 1001,
+            "tags": ["crash_detected"],
+            "custom_fields": {
+                "Status With": "support",
+                "Support Stage": "investigation",
+                "Release Stage": "n/a",
+            },
+        }
+        comments = [
+            {
+                "author_id": 2002,
+                "public": True,
+                "body": "Thanks, we are investigating.",
+                "html_body": "<p>Thanks, we are investigating.</p>",
+                "created_at": "2026-03-05T10:05:00Z",
+                "attachments": [{"file_name": "ios_stack_capture.bin"}],
+            }
+        ]
+
+        assessment = server_module._build_ticket_trouble_assessment(
+            ticket=ticket,
+            comments=comments,
+            initial_response_sla_minutes=60,
+            high_priority_stale_hours=8,
+        )
+
+        flag_codes = [flag.code for flag in assessment.flags]
+        self.assertNotIn("crash_process_gap", flag_codes)
+
+    def test_ticket_with_crash_subject_and_missing_crash_tag_is_high_alert(self) -> None:
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        ticket = {
+            "id": 9905,
+            "subject": "ACME | iOS | App crashing on launch",
+            "description": "Customer reports repeat app crashing.",
+            "status": "open",
+            "priority": "normal",
+            "created_at": "2026-03-05T10:00:00Z",
+            "updated_at": "2026-03-05T10:30:00Z",
+            "requester_id": 1001,
+            "tags": ["mobile"],
+            "custom_fields": {
+                "Status With": "support",
+                "Support Stage": "investigation",
+                "Release Stage": "n/a",
+            },
+        }
+        comments = [
+            {
+                "author_id": 2002,
+                "public": True,
+                "body": "Thanks, we are checking this.",
+                "html_body": "<p>Thanks, we are checking this.</p>",
+                "created_at": "2026-03-05T10:05:00Z",
+                "attachments": [],
+            }
+        ]
+
+        assessment = server_module._build_ticket_trouble_assessment(
+            ticket=ticket,
+            comments=comments,
+            initial_response_sla_minutes=60,
+            high_priority_stale_hours=8,
+        )
+
+        flag_codes = [flag.code for flag in assessment.flags]
+        self.assertIn("crash_tag_missing", flag_codes)
+
+    def test_ticket_with_crash_description_and_missing_crash_tag_is_high_alert(self) -> None:
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        ticket = {
+            "id": 9906,
+            "subject": "ACME | Android | Login issue",
+            "description": "App closes unexpectedly and crashes when user signs in.",
+            "status": "open",
+            "priority": "normal",
+            "created_at": "2026-03-05T10:00:00Z",
+            "updated_at": "2026-03-05T10:30:00Z",
+            "requester_id": 1001,
+            "tags": [],
+            "custom_fields": {
+                "Status With": "support",
+                "Support Stage": "investigation",
+                "Release Stage": "n/a",
+            },
+        }
+        comments = [
+            {
+                "author_id": 2002,
+                "public": True,
+                "body": "Thanks, we are checking this.",
+                "html_body": "<p>Thanks, we are checking this.</p>",
+                "created_at": "2026-03-05T10:05:00Z",
+                "attachments": [],
+            }
+        ]
+
+        assessment = server_module._build_ticket_trouble_assessment(
+            ticket=ticket,
+            comments=comments,
+            initial_response_sla_minutes=60,
+            high_priority_stale_hours=8,
+        )
+
+        flag_codes = [flag.code for flag in assessment.flags]
+        self.assertIn("crash_tag_missing", flag_codes)
+
+    def test_get_ticket_summary_includes_crash_tag_missing_alert(self) -> None:
+        request = CallToolRequest(
+            method="tools/call",
+            params=CallToolRequestParams(
+                name="get_ticket_summary",
+                arguments={"ticket_id": 9910},
+            ),
+        )
+
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        ticket_payload = {
+            "id": 9910,
+            "subject": "ACME | iOS | App crash when opening camera",
+            "description": "Camera flow causes app crash.",
+            "status": "open",
+            "priority": "normal",
+            "created_at": "2026-03-05T10:00:00Z",
+            "updated_at": "2026-03-05T10:10:00Z",
+            "requester_id": 1001,
+            "tags": [],
+            "custom_fields": {
+                "Status With": "support",
+                "Support Stage": "investigation",
+                "Release Stage": "n/a",
+            },
+            "ticket_url": "https://appdomesupport.zendesk.com/agent/tickets/9910",
+            "ticket_link": "[9910](https://appdomesupport.zendesk.com/agent/tickets/9910)",
+        }
+        comments_payload = [
+            {
+                "author_id": 2002,
+                "public": True,
+                "body": "Investigating now.",
+                "html_body": "<p>Investigating now.</p>",
+                "created_at": "2026-03-05T10:05:00Z",
+                "attachments": [],
+            }
+        ]
+
+        with (
+            patch.object(server_module, "_prepare_ticket_payload", return_value=ticket_payload),
+            patch.object(server_module, "zendesk_client") as mock_client,
+        ):
+            mock_client.get_ticket_comments.return_value = comments_payload
+            handler = server_module.mcp._mcp_server.request_handlers[CallToolRequest]
+            response = asyncio.run(handler(request))
+
+        summary_text = response.root.content[0].text
+        self.assertIn("## Trouble Scan", summary_text)
+        self.assertIn("crash_tag_missing", summary_text)
+        self.assertFalse(response.root.isError)
+
+    def test_crash_ticket_non_matching_attachment_filename_still_flags_process_gap(self) -> None:
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        ticket = {
+            "id": 9902,
+            "subject": "ACME | Android | Crash after login",
+            "status": "open",
+            "priority": "high",
+            "created_at": "2026-03-05T10:00:00Z",
+            "updated_at": "2026-03-05T10:30:00Z",
+            "requester_id": 1001,
+            "tags": ["crash_detected"],
+            "custom_fields": {
+                "Status With": "support",
+                "Support Stage": "investigation",
+                "Release Stage": "n/a",
+            },
+        }
+        comments = [
+            {
+                "author_id": 2002,
+                "public": True,
+                "body": "Thanks, we are investigating.",
+                "html_body": "<p>Thanks, we are investigating.</p>",
+                "created_at": "2026-03-05T10:05:00Z",
+                "attachments": [{"file_name": "screen_recording.mp4"}],
+            }
+        ]
+
+        assessment = server_module._build_ticket_trouble_assessment(
+            ticket=ticket,
+            comments=comments,
+            initial_response_sla_minutes=60,
+            high_priority_stale_hours=8,
+        )
+
+        flag_codes = [flag.code for flag in assessment.flags]
+        self.assertIn("crash_process_gap", flag_codes)
 
     def test_sample_solved_tickets_for_agent_is_deterministic_with_seed(self) -> None:
         client_payload = {
