@@ -139,18 +139,18 @@ Rules:
 - Do not use external assumptions or general policy knowledge unless explicitly present in the ticket.
 - Do not treat missing evidence as completed work.
 - For Escalated Tickets, if the customer has not explicitly confirmed the solution worked, do not mark the resolution as customer-acknowledged.
-- Crash ticket rule: if the ticket has tag "crash_detected", verify crash evidence handling.
-- For crash_detected tickets, treat stacktrace evidence as present only when there is explicit stacktrace content in comments or a relevant crash attachment (for example .ips, .crash, .log, .txt, .dmp).
-- If a crash_detected ticket has no stacktrace evidence, verify the assigned support engineer asked the customer for stacktrace/crash log details. If no such request appears in comments, flag this as a process gap.
-- For crash_detected tickets, enforce stacktrace request timeliness: if stacktrace evidence is not already present, the first explicit support request for stacktrace/crash logs should occur within 1 hour of crash identification.
-- For this check, infer crash identification time from the earliest explicit crash evidence in the ticket/comments; if the ticket already has tag "crash_detected", use ticket created timestamp when no earlier signal is available.
+- Crash/ANR ticket rule: if the ticket has tag "crash_detected" or "anr_yes", verify crash/ANR evidence handling.
+- For crash_detected/anr_yes tickets, treat stacktrace evidence as present only when there is explicit stacktrace content in comments or a relevant crash attachment (for example .ips, .crash, .log, .txt, .dmp).
+- If a crash_detected/anr_yes ticket has no stacktrace evidence, verify the assigned support engineer asked the customer for stacktrace/crash log details. If no such request appears in comments, flag this as a process gap.
+- For crash_detected/anr_yes tickets, enforce stacktrace request timeliness: if stacktrace evidence is not already present, the first explicit support request for stacktrace/crash logs should occur within 1 hour of crash identification.
+- For this check, infer crash identification time from the earliest explicit crash evidence in the ticket/comments; if the ticket already has tag "crash_detected" or "anr_yes", use ticket created timestamp when no earlier signal is available.
 - If the first stacktrace request is more than 1 hour after crash identification, explicitly flag "Late stacktrace request (>1h)" in Process Review.
-- For crash_detected tickets, always calculate and report "Time to escalation from ticket creation" using ticket created timestamp and the first explicit escalation timestamp in the evidence.
+- For crash_detected/anr_yes tickets, always calculate and report "Time to escalation from ticket creation" using ticket created timestamp and the first explicit escalation timestamp in the evidence.
 - If escalation evidence exists but no escalation timestamp can be determined, write "Not found" and explicitly flag this as a process gap.
-- For crash_detected tickets, if there is evidence of a crash but the review does not explicitly identify crash handling in Timeline/Process Review, this is a critical miss and the Compliance Score must be 0.
-- For crash_detected tickets, if there is no stacktrace evidence and no explicit stacktrace/crash-log request, the Compliance Score must be 0.
-- For crash_detected tickets, if the first stacktrace/crash-log request is more than 1 hour after crash identification, the Compliance Score must be 0.
-- For crash_detected tickets, escalation must be timely: if first escalation occurs more than 1 hour after crash identification (or cannot be verified due to missing timestamp), the Compliance Score must be 0.
+- For crash_detected/anr_yes tickets, if there is evidence of a crash/ANR but the review does not explicitly identify crash/ANR handling in Timeline/Process Review, this is a critical miss and the Compliance Score must be 0.
+- For crash_detected/anr_yes tickets, if there is no stacktrace evidence and no explicit stacktrace/crash-log request, the Compliance Score must be 0.
+- For crash_detected/anr_yes tickets, if the first stacktrace/crash-log request is more than 1 hour after crash identification, the Compliance Score must be 0.
+- For crash_detected/anr_yes tickets, escalation must be timely: if first escalation occurs more than 1 hour after crash identification (or cannot be verified due to missing timestamp), the Compliance Score must be 0.
 - Prefer concise, evidence-based statements.
 """
 
@@ -592,7 +592,9 @@ def _build_ticket_trouble_assessment(
     if crash_attachment_summary.has_crash_related_attachments:
         attachment_evidence_files = crash_attachment_summary.stacktrace_files or crash_attachment_summary.crash_related_files
 
-    if "crash_detected" not in tags and not crash_tag_reviewed and attachment_evidence_files:
+    has_crash_or_anr_tag = bool({"crash_detected", "anr_yes"} & tags)
+
+    if not has_crash_or_anr_tag and not crash_tag_reviewed and attachment_evidence_files:
         evidence_count = len(attachment_evidence_files)
         evidence_kind = "attachments" if evidence_count != 1 else "attachment"
         flags.append(
@@ -602,18 +604,18 @@ def _build_ticket_trouble_assessment(
                 message=(
                     f"Crash indicated by {evidence_count} {evidence_kind} "
                     f"({', '.join(attachment_evidence_files[:3])}), but missing required "
-                    "'crash_detected' tag and no 'crash_reviewed' override."
+                    "'crash_detected'/'anr_yes' tag and no 'crash_reviewed' override."
                 ),
             )
         )
-    elif "crash_detected" not in tags and not crash_tag_reviewed and _mentions_crash_in_ticket_text(subject, description):
+    elif not has_crash_or_anr_tag and not crash_tag_reviewed and _mentions_crash_in_ticket_text(subject, description):
         flags.append(
             TicketTroubleFlag(
                 code="crash_tag_missing",
                 severity="high",
                 message=(
                     "Ticket subject/description indicates a crash, but missing required "
-                    "'crash_detected' tag."
+                    "'crash_detected' or 'anr_yes' tag."
                 ),
             )
         )
@@ -775,7 +777,7 @@ def _build_ticket_trouble_assessment(
                 )
             )
 
-    if "crash_detected" in tags:
+    if has_crash_or_anr_tag:
         evidence_terms = ["stacktrace", "stack trace", "backtrace", "crash log", "exception"]
         request_terms = ["send stacktrace", "share stacktrace", "provide stacktrace", "crash log", "stack trace"]
 
