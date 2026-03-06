@@ -1005,6 +1005,92 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
         self.assertTrue(assessment.crash_attachment_summary.has_stacktrace_attachment)
         self.assertIn("ios_stack_capture.bin", assessment.crash_attachment_summary.stacktrace_files)
 
+    def test_ticket_with_crash_attachment_evidence_missing_crash_tag_scores_100(self) -> None:
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        ticket = {
+            "id": 9906,
+            "subject": "ACME | Android | Startup issue",
+            "status": "open",
+            "priority": "normal",
+            "created_at": "2026-03-05T10:00:00Z",
+            "updated_at": "2026-03-05T10:30:00Z",
+            "requester_id": 1001,
+            "tags": ["mobile"],
+            "custom_fields": {
+                "Status With": "support",
+                "Support Stage": "investigation",
+                "Release Stage": "n/a",
+            },
+        }
+        comments = [
+            {
+                "author_id": 1001,
+                "public": True,
+                "body": "Please see attached",
+                "html_body": "<p>Please see attached</p>",
+                "created_at": "2026-03-05T10:05:00Z",
+                "attachments": [
+                    {"file_name": "crash_1.jpg"},
+                    {"file_name": "crash_2.jpg"},
+                    {"file_name": "crash_3.jpg"},
+                ],
+            }
+        ]
+
+        assessment = server_module._build_ticket_trouble_assessment(
+            ticket=ticket,
+            comments=comments,
+            initial_response_sla_minutes=60,
+            high_priority_stale_hours=8,
+        )
+
+        flag_codes = [flag.code for flag in assessment.flags]
+        self.assertIn("crash_tag_missing_unreviewed_attachment_evidence", flag_codes)
+        self.assertEqual(assessment.risk_score, 100)
+
+    def test_ticket_with_crash_attachment_evidence_and_crash_reviewed_tag_does_not_flag_missing_crash_tag(self) -> None:
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        ticket = {
+            "id": 9907,
+            "subject": "ACME | Android | Startup issue",
+            "status": "open",
+            "priority": "normal",
+            "created_at": "2026-03-05T10:00:00Z",
+            "updated_at": "2026-03-05T10:30:00Z",
+            "requester_id": 1001,
+            "tags": ["mobile", "crash_reviewed"],
+            "custom_fields": {
+                "Status With": "support",
+                "Support Stage": "investigation",
+                "Release Stage": "n/a",
+            },
+        }
+        comments = [
+            {
+                "author_id": 1001,
+                "public": True,
+                "body": "Please see attached",
+                "html_body": "<p>Please see attached</p>",
+                "created_at": "2026-03-05T10:05:00Z",
+                "attachments": [{"file_name": "crash_1.jpg"}],
+            }
+        ]
+
+        assessment = server_module._build_ticket_trouble_assessment(
+            ticket=ticket,
+            comments=comments,
+            initial_response_sla_minutes=60,
+            high_priority_stale_hours=8,
+        )
+
+        flag_codes = [flag.code for flag in assessment.flags]
+        self.assertNotIn("crash_tag_missing_unreviewed_attachment_evidence", flag_codes)
+        self.assertNotIn("crash_tag_missing", flag_codes)
+
     def test_ticket_with_crash_subject_and_missing_crash_tag_is_high_alert(self) -> None:
         with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
             server_module = importlib.import_module("zendesk_mcp_server.server")

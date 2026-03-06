@@ -67,6 +67,7 @@ Validation rules:
 - Do not mark platform as missing when a dedicated platform category segment (for example "Platform" or "OS") is present.
 - Do not invent missing facts. If information is missing from the title, mark it invalid and explain what is missing.
 - An escalated Ticket (the Escalation Status field is populated) can only marked as solved when the customer confirmed that the provided solution worked.
+- If the ticket is waiting for a customer response, the "Status With" field must be set to "Customer"; otherwise mark the review as invalid and explain the mismatch.
 
 When reviewing a title, return one line each and exactly:
 Validation: VALID or INVALID
@@ -379,6 +380,7 @@ DEFAULT_INITIAL_RESPONSE_SLA_MINUTES = 60
 DEFAULT_HIGH_PRIORITY_STALE_HOURS = 8
 
 TROUBLE_FLAG_WEIGHTS: dict[str, int] = {
+    "crash_tag_missing_unreviewed_attachment_evidence": 100,
     "missing_initial_response": 34,
     "crash_process_gap": 45,
     "crash_tag_missing": 50,
@@ -585,7 +587,26 @@ def _build_ticket_trouble_assessment(
         key=lambda c: _parse_iso_datetime(c.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc),
     )
 
-    if "crash_detected" not in tags and _mentions_crash_in_ticket_text(subject, description):
+    crash_tag_reviewed = "crash_reviewed" in tags
+    attachment_evidence_files = []
+    if crash_attachment_summary.has_crash_related_attachments:
+        attachment_evidence_files = crash_attachment_summary.stacktrace_files or crash_attachment_summary.crash_related_files
+
+    if "crash_detected" not in tags and not crash_tag_reviewed and attachment_evidence_files:
+        evidence_count = len(attachment_evidence_files)
+        evidence_kind = "attachments" if evidence_count != 1 else "attachment"
+        flags.append(
+            TicketTroubleFlag(
+                code="crash_tag_missing_unreviewed_attachment_evidence",
+                severity="high",
+                message=(
+                    f"Crash indicated by {evidence_count} {evidence_kind} "
+                    f"({', '.join(attachment_evidence_files[:3])}), but missing required "
+                    "'crash_detected' tag and no 'crash_reviewed' override."
+                ),
+            )
+        )
+    elif "crash_detected" not in tags and not crash_tag_reviewed and _mentions_crash_in_ticket_text(subject, description):
         flags.append(
             TicketTroubleFlag(
                 code="crash_tag_missing",
