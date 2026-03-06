@@ -17,4 +17,4 @@ wheels/
 .env.dev
 .env.danielzendesk
 .DS_Store
-.log
+*.log
