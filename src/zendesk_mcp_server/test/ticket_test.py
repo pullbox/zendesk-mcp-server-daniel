@@ -228,7 +228,7 @@ class TestGetTicketsLastFiveHours(unittest.TestCase):
 
     def test_search_solved_tickets_for_agent_builds_expected_query(self) -> None:
         api_payload = {
-            "count": 2,
+            "count": 4,
             "results": [
                 {
                     "result_type": "ticket",
@@ -242,9 +242,29 @@ class TestGetTicketsLastFiveHours(unittest.TestCase):
                 },
                 {
                     "result_type": "ticket",
-                    "id": 202,
+                    "id": 2020,
+                    "subject": "Closed ticket",
+                    "status": "closed",
+                    "priority": "high",
+                    "created_at": "2026-02-15T11:00:00Z",
+                    "updated_at": "2026-02-18T09:00:00Z",
+                    "via": {"channel": "web"},
+                },
+                {
+                    "result_type": "ticket",
+                    "id": 2021,
                     "subject": "Solved ticket two",
                     "status": "solved",
+                    "priority": "high",
+                    "created_at": "2026-02-15T11:00:00Z",
+                    "updated_at": "2026-02-18T09:00:00Z",
+                    "via": {"channel": "web"},
+                },
+                {
+                    "result_type": "ticket",
+                    "id": 2022,
+                    "subject": "Pending ticket",
+                    "status": "pending",
                     "priority": "high",
                     "created_at": "2026-02-15T11:00:00Z",
                     "updated_at": "2026-02-18T09:00:00Z",
@@ -274,15 +294,14 @@ class TestGetTicketsLastFiveHours(unittest.TestCase):
 
         self.assertEqual(parsed_url.path, "/api/v2/search.json")
         self.assertIn("type:ticket", query)
-        self.assertIn("status:solved", query)
-        self.assertIn("solved>=2026-02-01", query)
-        self.assertIn("solved<2026-03-01", query)
+        self.assertIn("updated>=2026-02-01", query)
+        self.assertIn("updated<2026-03-01", query)
         self.assertIn('assignee:"pedro"', query)
-        self.assertEqual(result["total_matches"], 2)
-        self.assertEqual(result["retrieved_count"], 2)
+        self.assertEqual(result["total_matches"], 3)
+        self.assertEqual(result["retrieved_count"], 3)
         self.assertFalse(result["truncated"])
         self.assertEqual(result["excluded_api_created_count"], 0)
-        self.assertEqual(len(result["tickets"]), 2)
+        self.assertEqual([ticket["id"] for ticket in result["tickets"]], [201, 2020, 2021])
 
     def test_search_solved_tickets_for_agent_excludes_api_created(self) -> None:
         api_payload = {

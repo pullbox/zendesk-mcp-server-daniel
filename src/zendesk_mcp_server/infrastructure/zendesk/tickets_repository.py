@@ -166,13 +166,16 @@ class TicketsRepository:
         excluded_api_created_count = 0
 
         while url and len(collected) < max_results:
-            logger.info("Fetching solved-ticket search page %s: %s", page, url)
+            logger.info("Fetching resolved-ticket search page %s: %s", page, url)
             data = self._json_get(url)
             if total_matches is None and isinstance(data.get("count"), int):
                 total_matches = data["count"]
 
             for item in data.get("results", []):
                 if item.get("result_type") not in (None, "ticket"):
+                    continue
+                status = str(item.get("status") or "").lower()
+                if status not in {"solved", "closed"}:
                     continue
                 via_channel = ((item.get("via") or {}).get("channel"))
                 if exclude_api_created and via_channel == "api":
@@ -195,12 +198,14 @@ class TicketsRepository:
             page += 1
 
         retrieved_count = len(collected)
+        truncated = bool(url)
+        effective_total_matches = retrieved_count if not truncated else (total_matches if total_matches is not None else retrieved_count)
         return {
             "tickets": collected,
             "query": query,
-            "total_matches": total_matches if total_matches is not None else retrieved_count,
+            "total_matches": effective_total_matches,
             "retrieved_count": retrieved_count,
-            "truncated": bool(url),
+            "truncated": truncated,
             "excluded_api_created_count": excluded_api_created_count,
         }
 

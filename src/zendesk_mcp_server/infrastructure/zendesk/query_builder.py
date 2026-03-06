@@ -63,7 +63,7 @@ def build_get_tickets_search_query(
 
 def build_solved_tickets_query(agent: str, solved_after: str, solved_before: str) -> str:
     agent_str = str(agent).strip()
-    query_parts = ["type:ticket", "status:solved", f"solved>={solved_after}", f"solved<{solved_before}"]
+    query_parts = ["type:ticket", f"updated>={solved_after}", f"updated<{solved_before}"]
     if agent_str.isdigit():
         query_parts.append(f"assignee_id:{agent_str}")
     else:

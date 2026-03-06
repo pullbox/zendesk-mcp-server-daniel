@@ -1327,13 +1327,19 @@ def search_tickets_by_text(
 
 @mcp.tool(
     name="sample_solved_tickets_for_agent",
-    description="Return a random lightweight sample of solved tickets for an agent within a solved date range",
+    description="Return a random lightweight sample of resolved tickets (solved/closed) for an agent within a date range",
     structured_output=True,
 )
 def sample_solved_tickets_for_agent(
     agent: Annotated[str, Field(description="Agent assignee filter. Can be agent id, email, or name.")],
-    solved_after: Annotated[str, Field(description="Inclusive lower bound date for solved tickets, e.g. 2026-02-01.")],
-    solved_before: Annotated[str, Field(description="Exclusive upper bound date for solved tickets, e.g. 2026-03-01.")],
+    solved_after: Annotated[
+        str,
+        Field(description="Inclusive lower bound date for resolved tickets (based on updated_at), e.g. 2026-02-01."),
+    ],
+    solved_before: Annotated[
+        str,
+        Field(description="Exclusive upper bound date for resolved tickets (based on updated_at), e.g. 2026-03-01."),
+    ],
     count: Annotated[int, Field(description="How many random tickets to return.")] = 4,
     exclude_api_created: Annotated[
         bool,
@@ -1376,13 +1382,19 @@ def sample_solved_tickets_for_agent(
 
 @mcp.tool(
     name="review_random_solved_tickets_for_agent",
-    description="Sample solved tickets for an agent in a date range and return the full review packet for each sampled ticket",
+    description="Sample resolved tickets (solved/closed) for an agent in a date range and return the full review packet",
     structured_output=True,
 )
 def review_random_solved_tickets_for_agent(
     agent: Annotated[str, Field(description="Agent assignee filter. Can be agent id, email, or name.")],
-    solved_after: Annotated[str, Field(description="Inclusive lower bound date for solved tickets, e.g. 2026-02-01.")],
-    solved_before: Annotated[str, Field(description="Exclusive upper bound date for solved tickets, e.g. 2026-03-01.")],
+    solved_after: Annotated[
+        str,
+        Field(description="Inclusive lower bound date for resolved tickets (based on updated_at), e.g. 2026-02-01."),
+    ],
+    solved_before: Annotated[
+        str,
+        Field(description="Exclusive upper bound date for resolved tickets (based on updated_at), e.g. 2026-03-01."),
+    ],
     count: Annotated[int, Field(description="How many random tickets to review.")] = 4,
     exclude_api_created: Annotated[
         bool,
