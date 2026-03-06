@@ -92,8 +92,92 @@ class ZendeskReadMixin:
         except Exception as e:
             raise Exception(f"Failed to fetch knowledge base: {str(e)}")
 
+    def get_user(self, user_id: int) -> Dict[str, Any]:
+        """
+        Fetch a Zendesk user by ID.
+        """
+        try:
+            return self.users_repository.get_user(user_id)
+        except urllib.error.HTTPError as e:
+            error_body = e.read().decode() if e.fp else "No response body"
+            logger.error(f"Failed to fetch Zendesk user {user_id}: HTTP {e.code} - {e.reason}. {error_body}")
+            raise Exception(f"Failed to get user {user_id}: HTTP {e.code} - {e.reason}. {error_body}")
+        except urllib.error.URLError as e:
+            logger.error(f"Failed to fetch Zendesk user {user_id}: {e}")
+            raise Exception(f"Failed to get user {user_id}: {str(e)}")
+        except Exception as e:
+            logger.error(f"Failed to fetch Zendesk user {user_id}: {e}")
+            raise Exception(f"Failed to get user {user_id}: {str(e)}")
+
+    def get_users_by_ids(self, user_ids: List[int]) -> Dict[int, Dict[str, Any]]:
+        """
+        Fetch a bulk map of users by ID.
+        """
+        try:
+            return self.users_repository.get_users_by_ids(user_ids)
+        except Exception as e:
+            logger.error(f"Failed to fetch Zendesk users by ids: {e}")
+            raise Exception(f"Failed to get users by ids: {str(e)}")
+
+    def search_users(self, query: str, page: int = 1, per_page: int = 25) -> Dict[str, Any]:
+        """
+        Search users by name/email.
+        """
+        try:
+            return self.users_repository.search_users(query=query, page=page, per_page=per_page)
+        except urllib.error.HTTPError as e:
+            error_body = e.read().decode() if e.fp else "No response body"
+            logger.error(f"Failed to search Zendesk users: HTTP {e.code} - {e.reason}. {error_body}")
+            raise Exception(f"Failed to search users: HTTP {e.code} - {e.reason}. {error_body}")
+        except urllib.error.URLError as e:
+            logger.error(f"Failed to search Zendesk users: {e}")
+            raise Exception(f"Failed to search users: {str(e)}")
+        except Exception as e:
+            logger.error(f"Failed to search Zendesk users: {e}")
+            raise Exception(f"Failed to search users: {str(e)}")
+
+    def resolve_user(self, identifier: str | int) -> Dict[str, Any] | None:
+        """
+        Resolve an identifier (id/email/name) to a user profile.
+        """
+        token = str(identifier).strip()
+        if not token:
+            return None
+        if token.isdigit():
+            return self.get_user(int(token))
+
+        result = self.search_users(query=token, page=1, per_page=100)
+        users = result.get("users", [])
+        if not users:
+            return None
+
+        lowered_token = token.casefold()
+        exact_email = next((u for u in users if str(u.get("email") or "").casefold() == lowered_token), None)
+        if exact_email is not None:
+            return exact_email
+        exact_name = next((u for u in users if str(u.get("name") or "").casefold() == lowered_token), None)
+        if exact_name is not None:
+            return exact_name
+        return users[0]
+
 
 class ZendeskSearchMixin:
+    def _resolve_filter_user_identifier(self, identifier: Optional[str]) -> Optional[str]:
+        if identifier is None:
+            return None
+        token = str(identifier).strip()
+        if not token or token.isdigit():
+            return token or None
+        if "@" not in token:
+            return token
+        try:
+            user = self.resolve_user(token)
+        except Exception:
+            return token
+        if not user or user.get("id") is None:
+            return token
+        return str(user["id"])
+
     def get_tickets(
         self,
         page: int = 1,
@@ -114,12 +198,13 @@ class ZendeskSearchMixin:
         """
         try:
             now = self._current_utc_now()
+            resolved_agent = self._resolve_filter_user_identifier(agent)
             return self.tickets_repository.get_tickets(
                 page=page,
                 per_page=per_page,
                 sort_by=sort_by,
                 sort_order=sort_order,
-                agent=agent,
+                agent=resolved_agent,
                 organization=organization,
                 updated_since=updated_since,
                 last_hours=last_hours,
@@ -144,6 +229,7 @@ class ZendeskSearchMixin:
         max_results: int = 250,
         per_page: int = 100,
         exclude_api_created: bool = False,
+        resolve_agent_id: bool = False,
     ) -> Dict[str, Any]:
         """
         Search solved tickets for a specific agent in a solved date window.
@@ -153,8 +239,17 @@ class ZendeskSearchMixin:
         try:
             if not agent or not str(agent).strip():
                 raise ValueError("agent is required")
+            resolved_agent = self._resolve_filter_user_identifier(agent)
+            if resolve_agent_id and not str(agent).strip().isdigit():
+                try:
+                    resolved_user = self.resolve_user(agent)
+                    if resolved_user and resolved_user.get("id") is not None:
+                        resolved_agent = str(resolved_user["id"])
+                except Exception:
+                    # Fall back to existing identifier behavior if user lookup fails.
+                    pass
             return self.tickets_repository.search_solved_tickets_for_agent(
-                agent=agent,
+                agent=resolved_agent or agent,
                 solved_after=solved_after,
                 solved_before=solved_before,
                 max_results=max_results,
@@ -194,6 +289,7 @@ class ZendeskSearchMixin:
             if not phrase_str:
                 raise ValueError("phrase is required")
             now = self._current_utc_now()
+            resolved_comment_author = self._resolve_filter_user_identifier(comment_author)
             return self.tickets_repository.search_tickets_by_text(
                 phrase=phrase_str,
                 page=page,
@@ -206,7 +302,7 @@ class ZendeskSearchMixin:
                 status=status,
                 include_solved=include_solved,
                 exclude_internal=exclude_internal,
-                comment_author=comment_author,
+                comment_author=resolved_comment_author,
                 now=now,
             )
         except urllib.error.HTTPError as e:

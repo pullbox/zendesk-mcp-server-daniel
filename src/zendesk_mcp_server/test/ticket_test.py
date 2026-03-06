@@ -329,6 +329,36 @@ class TestGetTicketsLastFiveHours(unittest.TestCase):
         self.assertEqual([ticket["id"] for ticket in result["tickets"]], [212])
         self.assertEqual(result["excluded_api_created_count"], 1)
 
+    def test_search_solved_tickets_for_agent_resolves_name_to_assignee_id_when_requested(self) -> None:
+        api_payload = {
+            "count": 0,
+            "results": [],
+            "next_page": None,
+        }
+
+        mock_response = MagicMock()
+        mock_response.read.return_value = json.dumps(api_payload).encode("utf-8")
+        mock_urlopen = MagicMock()
+        mock_urlopen.return_value.__enter__.return_value = mock_response
+
+        with (
+            patch("zendesk_mcp_server.zendesk_client.urllib.request.urlopen", mock_urlopen),
+            patch.object(self.client, "resolve_user", return_value={"id": 3001}),
+        ):
+            self.client.search_solved_tickets_for_agent(
+                agent="pedro",
+                solved_after="2026-02-01",
+                solved_before="2026-03-01",
+                resolve_agent_id=True,
+            )
+
+        request = mock_urlopen.call_args.args[0]
+        parsed_url = urlparse(request.full_url)
+        params = parse_qs(parsed_url.query)
+        query = unquote(params["query"][0])
+
+        self.assertIn("assignee_id:3001", query)
+
     def test_search_tickets_by_text_builds_expected_query(self) -> None:
         api_payload = {
             "results": [
@@ -418,6 +448,54 @@ class TestGetTicketsLastFiveHours(unittest.TestCase):
         query = unquote(params["query"][0])
 
         self.assertNotIn("status<solved", query)
+
+    def test_get_tickets_resolves_agent_email_to_assignee_id(self) -> None:
+        fixed_now = datetime(2026, 3, 2, 15, 30, 0, tzinfo=timezone.utc)
+        api_payload = {"results": [], "next_page": None}
+
+        mock_response = MagicMock()
+        mock_response.read.return_value = json.dumps(api_payload).encode("utf-8")
+        mock_urlopen = MagicMock()
+        mock_urlopen.return_value.__enter__.return_value = mock_response
+
+        with (
+            patch("zendesk_mcp_server.zendesk_client.datetime") as mock_datetime,
+            patch("zendesk_mcp_server.zendesk_client.urllib.request.urlopen", mock_urlopen),
+            patch.object(self.client, "resolve_user", return_value={"id": 3001}),
+        ):
+            mock_datetime.now.return_value = fixed_now
+            self.client.get_tickets(agent="agent@example.com", per_page=25)
+
+        request = mock_urlopen.call_args.args[0]
+        parsed_url = urlparse(request.full_url)
+        params = parse_qs(parsed_url.query)
+        query = unquote(params["query"][0])
+
+        self.assertIn("assignee_id:3001", query)
+
+    def test_search_tickets_by_text_resolves_comment_author_email_to_commenter_id(self) -> None:
+        api_payload = {"results": [], "next_page": None}
+
+        mock_response = MagicMock()
+        mock_response.read.return_value = json.dumps(api_payload).encode("utf-8")
+        mock_urlopen = MagicMock()
+        mock_urlopen.return_value.__enter__.return_value = mock_response
+
+        with (
+            patch("zendesk_mcp_server.zendesk_client.urllib.request.urlopen", mock_urlopen),
+            patch.object(self.client, "resolve_user", return_value={"id": 4002}),
+        ):
+            self.client.search_tickets_by_text(
+                phrase="Facephi",
+                comment_author="requester@example.com",
+            )
+
+        request = mock_urlopen.call_args.args[0]
+        parsed_url = urlparse(request.full_url)
+        params = parse_qs(parsed_url.query)
+        query = unquote(params["query"][0])
+
+        self.assertIn("commenter:4002", query)
 
 
 class TestServerGetTicketsLastFiveHours(unittest.TestCase):
@@ -1318,6 +1396,7 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
             solved_before="2026-03-01",
             max_results=50,
             exclude_api_created=True,
+            resolve_agent_id=True,
         )
         self.assertEqual([ticket["id"] for ticket in structured["tickets"]], expected_ids)
         self.assertEqual(structured["sampled_count"], 2)
@@ -1390,6 +1469,69 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
         )
         self.assertEqual(response.root.structuredContent, expected_payload)
         self.assertEqual(json.loads(response.root.content[0].text), expected_payload)
+        self.assertFalse(response.root.isError)
+
+    def test_get_user_tool_returns_user_profile(self) -> None:
+        request = CallToolRequest(
+            method="tools/call",
+            params=CallToolRequestParams(
+                name="get_user",
+                arguments={"user_id": 29115982058781},
+            ),
+        )
+
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        with patch.object(server_module, "zendesk_client") as mock_client:
+            mock_client.get_user.return_value = {
+                "id": 29115982058781,
+                "name": "Jane Doe",
+                "email": "jane@example.com",
+                "active": True,
+                "role": "end-user",
+                "organization_id": 123,
+                "external_id": None,
+            }
+            handler = server_module.mcp._mcp_server.request_handlers[CallToolRequest]
+            response = asyncio.run(handler(request))
+
+        payload = json.loads(response.root.content[0].text)
+        self.assertEqual(payload["id"], 29115982058781)
+        self.assertEqual(payload["name"], "Jane Doe")
+        self.assertEqual(payload["email"], "jane@example.com")
+        self.assertFalse(response.root.isError)
+
+    def test_translate_user_ids_tool_returns_profiles_and_missing_ids(self) -> None:
+        request = CallToolRequest(
+            method="tools/call",
+            params=CallToolRequestParams(
+                name="translate_user_ids",
+                arguments={"user_ids": [1001, 1002]},
+            ),
+        )
+
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        with patch.object(server_module, "zendesk_client") as mock_client:
+            mock_client.get_users_by_ids.return_value = {
+                1001: {
+                    "id": 1001,
+                    "name": "Requester One",
+                    "email": "requester1@example.com",
+                    "active": True,
+                    "role": "end-user",
+                    "organization_id": None,
+                    "external_id": None,
+                }
+            }
+            handler = server_module.mcp._mcp_server.request_handlers[CallToolRequest]
+            response = asyncio.run(handler(request))
+
+        structured = response.root.structuredContent
+        self.assertEqual(structured["users_by_id"]["1001"]["email"], "requester1@example.com")
+        self.assertEqual(structured["missing_ids"], [1002])
         self.assertFalse(response.root.isError)
 
 

@@ -75,6 +75,7 @@ class ZendeskClient(
         self.comments_write_repository = services.comments_write_repository
         self.knowledge_base_repository = services.knowledge_base_repository
         self.field_value_mapper = services.field_value_mapper
+        self.users_repository = services.users_repository
 
     def _json_get(self, url: str, timeout: int = 30) -> Dict[str, Any]:
         req = urllib.request.Request(url)

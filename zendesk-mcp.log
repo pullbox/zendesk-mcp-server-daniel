@@ -2709,3 +2709,10 @@
 2026-03-06 11:44:25,965 - INFO - Fetched Zendesk ticket 42124 successfully
 2026-03-06 11:44:25,965 - INFO - Fetching Zendesk comments for ticket 42124
 2026-03-06 11:44:26,748 - INFO - Fetched 35 Zendesk comments for ticket 42124
+2026-03-06 11:59:29,325 - INFO - Processing request of type CallToolRequest
+2026-03-06 11:59:29,329 - INFO - Fetching solved-ticket search page 1: https://appdome.zendesk.com/api/v2/search.json?query=type%3Aticket+status%3Asolved+solved%3E%3D2026-02-01+solved%3C2026-03-01+assignee%3A%22James+Christie%22&page=1&per_page=100&sort_by=created_at&sort_order=desc
+2026-03-06 12:00:47,496 - INFO - Processing request of type CallToolRequest
+2026-03-06 12:00:47,503 - INFO - Fetching solved-ticket search page 1: https://appdome.zendesk.com/api/v2/search.json?query=type%3Aticket+status%3Asolved+solved%3E%3D2026-02-01+solved%3C2026-03-01+assignee%3A%22jamesc%40appdome.com%22&page=1&per_page=100&sort_by=created_at&sort_order=desc
+2026-03-06 12:02:38,762 - INFO - Processing request of type CallToolRequest
+2026-03-06 12:02:38,768 - INFO - Fetching Zendesk ticket 42107
+2026-03-06 12:02:39,360 - INFO - Fetched Zendesk ticket 42107 successfully

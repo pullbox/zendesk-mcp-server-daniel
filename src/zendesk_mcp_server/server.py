@@ -177,7 +177,54 @@ def _prepare_ticket_payload(ticket_id: int) -> dict[str, Any]:
     ticket = apply_ticket_field_displays(ticket, ticket_field_option_resolver)
     ticket["ticket_url"] = _ticket_url(ticket_id)
     ticket["ticket_link"] = _ticket_link(ticket_id)
+    _hydrate_ticket_user_fields(ticket)
     return ticket
+
+
+def _hydrate_ticket_user_fields(ticket: dict[str, Any]) -> None:
+    requester_id = ticket.get("requester_id")
+    assignee_id = ticket.get("assignee_id")
+    user_ids = [user_id for user_id in (requester_id, assignee_id) if user_id is not None]
+    if not user_ids:
+        return
+
+    try:
+        users_by_id = zendesk_client.get_users_by_ids(user_ids)
+    except Exception as exc:
+        logger.warning("Failed to hydrate ticket users for ticket %s: %s", ticket.get("id"), exc)
+        return
+
+    requester = users_by_id.get(int(requester_id)) if requester_id is not None else None
+    assignee = users_by_id.get(int(assignee_id)) if assignee_id is not None else None
+
+    ticket["requester"] = requester
+    ticket["assignee"] = assignee
+    ticket["requester_name"] = requester.get("name") if requester else None
+    ticket["requester_email"] = requester.get("email") if requester else None
+    ticket["assignee_name"] = assignee.get("name") if assignee else None
+    ticket["assignee_email"] = assignee.get("email") if assignee else None
+
+
+def _hydrate_comment_author_fields(comments: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    author_ids = sorted(
+        {int(comment["author_id"]) for comment in comments if comment.get("author_id") is not None},
+    )
+    if not author_ids:
+        return comments
+
+    try:
+        users_by_id = zendesk_client.get_users_by_ids(author_ids)
+    except Exception as exc:
+        logger.warning("Failed to hydrate comment authors: %s", exc)
+        return comments
+
+    for comment in comments:
+        author_id = comment.get("author_id")
+        user = users_by_id.get(int(author_id)) if author_id is not None else None
+        comment["author"] = user
+        comment["author_name"] = user.get("name") if user else None
+        comment["author_email"] = user.get("email") if user else None
+    return comments
 
 
 def _ticket_url(ticket_id: int | None) -> str | None:
@@ -274,6 +321,32 @@ class GetTicketsResult(BaseModel):
     has_more: bool
     next_page: int | None = None
     previous_page: int | None = None
+
+
+class UserItem(BaseModel):
+    id: int
+    name: str | None = None
+    email: str | None = None
+    active: bool | None = None
+    role: str | None = None
+    organization_id: int | None = None
+    external_id: str | None = None
+
+
+class SearchUsersResult(BaseModel):
+    users: list[UserItem]
+    count: int
+    query: str
+    page: int
+    per_page: int
+    has_more: bool
+    next_page: int | None = None
+    previous_page: int | None = None
+
+
+class TranslateUsersResult(BaseModel):
+    users_by_id: dict[str, UserItem]
+    missing_ids: list[int] = Field(default_factory=list)
 
 
 class SearchTicketsByTextFilters(BaseModel):
@@ -903,6 +976,76 @@ def get_ticket(
 
 
 @mcp.tool(
+    name="get_user",
+    description="Retrieve a Zendesk user by ID (includes name/email for ID translation)",
+)
+def get_user(
+    user_id: Annotated[int, Field(description="Zendesk user ID to retrieve")],
+) -> str:
+    user = zendesk_client.get_user(user_id)
+    return json.dumps(UserItem.model_validate(user).model_dump(mode="json"))
+
+
+@mcp.tool(
+    name="search_users",
+    description="Search Zendesk users by name/email for reverse lookup and filtering",
+    structured_output=True,
+)
+def search_users(
+    query: Annotated[str, Field(description="Name/email/id text to search for")],
+    page: Annotated[int, Field(description="Page number")] = 1,
+    per_page: Annotated[int, Field(description="Results per page (max 100)")] = 25,
+) -> SearchUsersResult:
+    result = zendesk_client.search_users(query=query, page=page, per_page=per_page)
+    payload = {
+        "users": result.get("users", []),
+        "count": result.get("count", 0),
+        "query": result.get("query", query),
+        "page": result.get("page", page),
+        "per_page": result.get("per_page", per_page),
+        "has_more": bool(result.get("next_page")),
+        "next_page": page + 1 if result.get("next_page") else None,
+        "previous_page": page - 1 if page > 1 else None,
+    }
+    return SearchUsersResult.model_validate(payload)
+
+
+@mcp.tool(
+    name="translate_user_ids",
+    description="Translate Zendesk user IDs to user profiles (name/email) in bulk",
+    structured_output=True,
+)
+def translate_user_ids(
+    user_ids: Annotated[list[int], Field(description="User IDs to translate")],
+) -> TranslateUsersResult:
+    users_by_id = zendesk_client.get_users_by_ids(user_ids)
+    payload = {
+        "users_by_id": {str(user_id): user for user_id, user in users_by_id.items()},
+        "missing_ids": [int(user_id) for user_id in user_ids if int(user_id) not in users_by_id],
+    }
+    return TranslateUsersResult.model_validate(payload)
+
+
+@mcp.tool(
+    name="resolve_user_identifier",
+    description="Resolve an identifier (id, email, or name) into a single user profile",
+)
+def resolve_user_identifier(
+    identifier: Annotated[str, Field(description="User identifier: id/email/name")],
+) -> str:
+    user = zendesk_client.resolve_user(identifier)
+    if user is None:
+        return json.dumps({"identifier": identifier, "resolved": False, "user": None})
+    return json.dumps(
+        {
+            "identifier": identifier,
+            "resolved": True,
+            "user": UserItem.model_validate(user).model_dump(mode="json"),
+        }
+    )
+
+
+@mcp.tool(
     name="get_ticket_summary",
     description="Retrieve a Zendesk ticket as a compact display-ready summary",
 )
@@ -1205,6 +1348,7 @@ def sample_solved_tickets_for_agent(
         solved_before=solved_before,
         max_results=max_pool,
         exclude_api_created=exclude_api_created,
+        resolve_agent_id=True,
     )
 
     tickets = search_result["tickets"]
@@ -1306,6 +1450,7 @@ def get_ticket_comments(
     ticket_id: Annotated[int, Field(description="The ID of the ticket to get comments for")],
 ) -> str:
     comments = zendesk_client.get_ticket_comments(ticket_id)
+    comments = _hydrate_comment_author_fields(comments)
     return json.dumps(comments)
 
 

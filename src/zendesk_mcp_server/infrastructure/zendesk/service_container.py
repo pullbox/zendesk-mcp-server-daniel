@@ -14,6 +14,7 @@ from zendesk_mcp_server.infrastructure.zendesk.ticket_mapper import (
 )
 from zendesk_mcp_server.infrastructure.zendesk.tickets_crud_repository import TicketsCrudRepository
 from zendesk_mcp_server.infrastructure.zendesk.tickets_repository import TicketsRepository
+from zendesk_mcp_server.infrastructure.zendesk.users_repository import UsersRepository
 
 
 @dataclass
@@ -25,6 +26,7 @@ class ZendeskServices:
     comments_write_repository: CommentsWriteRepository
     knowledge_base_repository: KnowledgeBaseRepository
     field_value_mapper: FieldValueMapper
+    users_repository: UsersRepository
 
 
 def build_zendesk_services(
@@ -43,6 +45,10 @@ def build_zendesk_services(
     )
     field_value_mapper = FieldValueMapper(get_ticket_fields=get_ticket_fields)
     comments_repository = CommentsRepository(
+        base_url=base_url,
+        json_get=json_get,
+    )
+    users_repository = UsersRepository(
         base_url=base_url,
         json_get=json_get,
     )
@@ -70,4 +76,5 @@ def build_zendesk_services(
         comments_write_repository=comments_write_repository,
         knowledge_base_repository=knowledge_base_repository,
         field_value_mapper=field_value_mapper,
+        users_repository=users_repository,
     )
