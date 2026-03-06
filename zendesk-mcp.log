@@ -2742,3 +2742,96 @@
 2026-03-06 12:48:47,065 - INFO - Fetching Zendesk tickets from search API: https://appdome.zendesk.com/api/v2/search.json?query=type%3Aticket+assignee_id%3A29115982058781+updated%3E2026-02-01&page=1&per_page=100&sort_by=updated_at&sort_order=desc
 2026-03-06 12:48:47,065 - INFO - Zendesk search query: type:ticket assignee_id:29115982058781 updated>2026-02-01
 2026-03-06 12:48:47,674 - INFO - Fetched 18 raw search results from Zendesk
+2026-03-06 12:56:10,638 - INFO - zendesk mcp server started
+2026-03-06 12:56:10,642 - INFO - Fetching Zendesk ticket field definitions
+2026-03-06 12:56:11,657 - INFO - Fetched Zendesk ticket field definitions successfully
+2026-03-06 12:56:11,657 - INFO - Fetching Zendesk ticket field options for field 25497966
+2026-03-06 12:56:12,193 - INFO - Fetched Zendesk ticket field options for field 25497966 successfully
+2026-03-06 12:56:12,193 - INFO - Fetching Zendesk ticket field options for field 360038406752
+2026-03-06 12:56:12,663 - INFO - Fetched Zendesk ticket field options for field 360038406752 successfully
+2026-03-06 12:56:12,663 - INFO - Fetching Zendesk ticket field options for field 4415622115985
+2026-03-06 12:56:12,889 - INFO - Fetched Zendesk ticket field options for field 4415622115985 successfully
+2026-03-06 12:56:12,890 - INFO - Fetching Zendesk ticket field options for field 11068759378973
+2026-03-06 12:56:13,644 - INFO - Fetched Zendesk ticket field options for field 11068759378973 successfully
+2026-03-06 12:56:13,644 - INFO - Loaded ticket field option maps for 4 relevant fields
+2026-03-06 12:56:13,710 - INFO - Processing request of type ListToolsRequest
+2026-03-06 12:56:13,711 - INFO - Processing request of type ListPromptsRequest
+2026-03-06 12:56:13,712 - INFO - Processing request of type ListResourcesRequest
+2026-03-06 12:56:43,302 - INFO - Processing request of type CallToolRequest
+2026-03-06 12:56:44,265 - INFO - Fetching resolved-ticket search page 1: https://appdome.zendesk.com/api/v2/search.json?query=type%3Aticket+updated%3E%3D2026-02-01+updated%3C2026-03-01+assignee_id%3A29115982058781&page=1&per_page=100&sort_by=created_at&sort_order=desc
+2026-03-06 12:56:44,998 - INFO - Fetching Zendesk ticket 42052
+2026-03-06 12:56:45,562 - INFO - Fetching Zendesk ticket fields
+2026-03-06 12:56:46,243 - INFO - Fetched Zendesk ticket fields successfully
+2026-03-06 12:56:46,243 - INFO - Fetched Zendesk ticket 42052 successfully
+2026-03-06 12:56:46,559 - INFO - Fetching Zendesk comments for ticket 42052
+2026-03-06 12:56:46,882 - INFO - Fetched 5 Zendesk comments for ticket 42052
+2026-03-06 12:56:46,883 - INFO - Fetching Zendesk ticket 40944
+2026-03-06 12:56:47,156 - INFO - Fetched Zendesk ticket 40944 successfully
+2026-03-06 12:56:47,485 - INFO - Fetching Zendesk comments for ticket 40944
+2026-03-06 12:56:47,987 - INFO - Fetched 4 Zendesk comments for ticket 40944
+2026-03-06 12:56:47,988 - INFO - Fetching Zendesk ticket 41575
+2026-03-06 12:56:48,248 - INFO - Fetched Zendesk ticket 41575 successfully
+2026-03-06 12:56:48,541 - INFO - Fetching Zendesk comments for ticket 41575
+2026-03-06 12:56:49,063 - INFO - Fetched 3 Zendesk comments for ticket 41575
+2026-03-06 12:56:49,064 - INFO - Fetching Zendesk ticket 41556
+2026-03-06 12:56:49,624 - INFO - Fetched Zendesk ticket 41556 successfully
+2026-03-06 12:56:50,256 - INFO - Fetching Zendesk comments for ticket 41556
+2026-03-06 12:56:50,626 - INFO - Fetched 8 Zendesk comments for ticket 41556
+2026-03-06 14:58:30,866 - INFO - zendesk mcp server started
+2026-03-06 14:58:30,872 - INFO - Fetching Zendesk ticket field definitions
+2026-03-06 14:58:31,941 - INFO - Fetched Zendesk ticket field definitions successfully
+2026-03-06 14:58:31,941 - INFO - Fetching Zendesk ticket field options for field 25497966
+2026-03-06 14:58:32,451 - INFO - Fetched Zendesk ticket field options for field 25497966 successfully
+2026-03-06 14:58:32,451 - INFO - Fetching Zendesk ticket field options for field 360038406752
+2026-03-06 14:58:32,679 - INFO - Fetched Zendesk ticket field options for field 360038406752 successfully
+2026-03-06 14:58:32,679 - INFO - Fetching Zendesk ticket field options for field 4415622115985
+2026-03-06 14:58:33,201 - INFO - Fetched Zendesk ticket field options for field 4415622115985 successfully
+2026-03-06 14:58:33,202 - INFO - Fetching Zendesk ticket field options for field 11068759378973
+2026-03-06 14:58:33,445 - INFO - Fetched Zendesk ticket field options for field 11068759378973 successfully
+2026-03-06 14:58:33,445 - INFO - Loaded ticket field option maps for 4 relevant fields
+2026-03-06 14:58:33,499 - INFO - Processing request of type ListToolsRequest
+2026-03-06 14:58:33,500 - INFO - Processing request of type ListPromptsRequest
+2026-03-06 14:58:33,501 - INFO - Processing request of type ListResourcesRequest
+2026-03-06 14:59:01,875 - INFO - Processing request of type CallToolRequest
+2026-03-06 14:59:01,882 - INFO - Fetching Zendesk ticket 40666
+2026-03-06 14:59:02,691 - INFO - Fetching Zendesk ticket fields
+2026-03-06 14:59:03,364 - INFO - Fetched Zendesk ticket fields successfully
+2026-03-06 14:59:03,365 - INFO - Fetched Zendesk ticket 40666 successfully
+2026-03-06 14:59:03,666 - INFO - Fetching Zendesk comments for ticket 40666
+2026-03-06 14:59:04,360 - INFO - Fetched 9 Zendesk comments for ticket 40666
+2026-03-06 15:03:17,339 - INFO - Processing request of type CallToolRequest
+2026-03-06 15:03:18,523 - INFO - Fetching resolved-ticket search page 1: https://appdome.zendesk.com/api/v2/search.json?query=type%3Aticket+updated%3E%3D2025-01-01+updated%3C2025-02-01+assignee_id%3A14638745505949&page=1&per_page=100&sort_by=created_at&sort_order=desc
+2026-03-06 15:03:19,258 - INFO - Fetching Zendesk ticket 32252
+2026-03-06 15:03:19,810 - INFO - Fetched Zendesk ticket 32252 successfully
+2026-03-06 15:03:20,342 - INFO - Fetching Zendesk comments for ticket 32252
+2026-03-06 15:03:20,961 - INFO - Fetched 7 Zendesk comments for ticket 32252
+2026-03-06 15:03:20,962 - INFO - Fetching Zendesk ticket 33367
+2026-03-06 15:03:21,769 - INFO - Fetched Zendesk ticket 33367 successfully
+2026-03-06 15:03:22,055 - INFO - Fetching Zendesk comments for ticket 33367
+2026-03-06 15:03:22,539 - INFO - Fetched 6 Zendesk comments for ticket 33367
+2026-03-06 15:03:22,542 - INFO - Fetching Zendesk ticket 33436
+2026-03-06 15:03:22,897 - INFO - Fetched Zendesk ticket 33436 successfully
+2026-03-06 15:03:23,252 - INFO - Fetching Zendesk comments for ticket 33436
+2026-03-06 15:03:23,623 - INFO - Fetched 8 Zendesk comments for ticket 33436
+2026-03-06 15:03:23,623 - INFO - Fetching Zendesk ticket 32772
+2026-03-06 15:03:24,025 - INFO - Fetched Zendesk ticket 32772 successfully
+2026-03-06 15:03:24,354 - INFO - Fetching Zendesk comments for ticket 32772
+2026-03-06 15:03:25,613 - INFO - Fetched 6 Zendesk comments for ticket 32772
+2026-03-06 15:09:50,730 - INFO - Processing request of type CallToolRequest
+2026-03-06 15:09:51,328 - INFO - Fetching resolved-ticket search page 1: https://appdome.zendesk.com/api/v2/search.json?query=type%3Aticket+updated%3E%3D2025-02-01+updated%3C2025-03-01+assignee_id%3A14638745505949&page=1&per_page=100&sort_by=created_at&sort_order=desc
+2026-03-06 15:09:52,236 - INFO - Fetching Zendesk ticket 33964
+2026-03-06 15:09:52,494 - INFO - Fetched Zendesk ticket 33964 successfully
+2026-03-06 15:09:52,769 - INFO - Fetching Zendesk comments for ticket 33964
+2026-03-06 15:09:53,439 - INFO - Fetched 4 Zendesk comments for ticket 33964
+2026-03-06 15:09:53,439 - INFO - Fetching Zendesk ticket 34170
+2026-03-06 15:09:53,768 - INFO - Fetched Zendesk ticket 34170 successfully
+2026-03-06 15:09:54,054 - INFO - Fetching Zendesk comments for ticket 34170
+2026-03-06 15:09:54,577 - INFO - Fetched 2 Zendesk comments for ticket 34170
+2026-03-06 15:09:54,578 - INFO - Fetching Zendesk ticket 33677
+2026-03-06 15:09:55,209 - INFO - Fetched Zendesk ticket 33677 successfully
+2026-03-06 15:09:55,790 - INFO - Fetching Zendesk comments for ticket 33677
+2026-03-06 15:09:56,310 - INFO - Fetched 9 Zendesk comments for ticket 33677
+2026-03-06 15:09:56,310 - INFO - Fetching Zendesk ticket 33483
+2026-03-06 15:09:56,886 - INFO - Fetched Zendesk ticket 33483 successfully
+2026-03-06 15:09:57,171 - INFO - Fetching Zendesk comments for ticket 33483
+2026-03-06 15:09:57,926 - INFO - Fetched 10 Zendesk comments for ticket 33483

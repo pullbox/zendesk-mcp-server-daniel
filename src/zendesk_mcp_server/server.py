@@ -139,6 +139,14 @@ Rules:
 - Escalated Tickets are tickets where the Escalation Status field is populated.
 - Do not use external assumptions or general policy knowledge unless explicitly present in the ticket.
 - Do not treat missing evidence as completed work.
+- Email chain and preamble scope: when a ticket originates from an email chain, use only support interaction evidence (agent public comments, customer replies in-ticket, and internal notes) to evaluate agent behavior.
+- Do not use email chain preambles, introductory forwarding text, or prior forwarded email history to justify agent handling decisions.
+- Customer context statements in the opening message (for example, "I am writing on behalf of X who is on leave") explain ticket origin only and must not be used to justify or excuse agent delay/timeliness.
+- Delay justification rule: attribute a delay to a specific cause only when that cause is explicitly documented by the agent in their actions or internal notes.
+- Customer-side context in the opening message is not documented delay justification for agent handling.
+- If no explicit agent-documented delay reason exists, assess delay on its face based on the timeline evidence.
+- Evidence source discipline: for each timeline item and compliance observation, explicitly state source and author (for example: agent public comment, customer reply, internal note, email chain preamble).
+- Do not mix evidence sources when drawing compliance conclusions; customer context about their own situation cannot be used to evaluate or excuse agent actions.
 - For Escalated Tickets, if the customer has not explicitly confirmed the solution worked, do not mark the resolution as customer-acknowledged.
 - Crash/ANR ticket rule: if the ticket has tag "crash_detected" or "anr_yes", verify crash/ANR evidence handling.
 - For crash_detected/anr_yes tickets, treat stacktrace evidence as present only when there is explicit stacktrace content in comments or a relevant crash attachment (for example .ips, .crash, .log, .txt, .dmp).
