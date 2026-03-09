@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import random
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any
 
@@ -449,6 +450,7 @@ class TicketTroubleAssessment(BaseModel):
     risk_score: int
     flags: list[TicketTroubleFlag]
     crash_attachment_summary: CrashAttachmentSummary | None = None
+    recent_comment_notes: list[str] = Field(default_factory=list)
 
 
 class ScanTicketsInTroubleResult(BaseModel):
@@ -492,6 +494,33 @@ CRASH_SIGNAL_TERMS = [
     "fatal exception",
     "segmentation fault",
 ]
+CALL_MENTION_TERMS = [
+    "call",
+    "phone call",
+    "zoom",
+    "meeting",
+    "meet",
+    "google meet",
+    "teams",
+    "schedule",
+    "scheduled",
+    "scheduling",
+    "reschedule",
+]
+DATE_OR_TIME_PATTERN = re.compile(
+    r"\b("
+    r"\d{4}-\d{2}-\d{2}"
+    r"|"
+    r"\d{1,2}/\d{1,2}(?:/\d{2,4})?"
+    r"|"
+    r"\d{1,2}:\d{2}\s?(?:am|pm)?"
+    r"|"
+    r"(?:mon|tue|wed|thu|fri|sat|sun)(?:day)?"
+    r"|"
+    r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)(?:[a-z]*)\s+\d{1,2}(?:,\s*\d{4})?"
+    r")\b",
+    re.IGNORECASE,
+)
 CRASH_ATTACHMENT_KEYWORDS = (
     "crash",
     "stacktrace",
@@ -523,6 +552,45 @@ def _contains_any(text: str | None, terms: list[str]) -> bool:
         return False
     lowered = text.lower()
     return any(term in lowered for term in terms)
+
+
+def _strip_html(text: str | None) -> str:
+    if not text:
+        return ""
+    return re.sub(r"<[^>]+>", " ", text)
+
+
+def _extract_recent_comment_notes(comments: list[dict[str, Any]], requester_id: int | None) -> list[str]:
+    comments_sorted = sorted(
+        comments,
+        key=lambda c: _parse_iso_datetime(c.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc),
+    )
+    recent_comments = comments_sorted[-3:]
+    notes: list[str] = []
+    for comment in recent_comments:
+        source = _comment_source(comment, requester_id)
+        created_at = comment.get("created_at") or "Not found"
+        text = " ".join(
+            filter(
+                None,
+                [
+                    str(comment.get("body") or ""),
+                    _strip_html(comment.get("html_body")),
+                ],
+            )
+        )
+        lowered = text.lower()
+
+        if any(term in lowered for term in CALL_MENTION_TERMS):
+            notes.append(f"Recent comment mentions a call/scheduling ({source}, {created_at}).")
+
+        datetime_match = DATE_OR_TIME_PATTERN.search(text)
+        if datetime_match:
+            notes.append(
+                "Recent comment mentions date/time "
+                f'"{datetime_match.group(0)}" ({source}, {created_at}).'
+            )
+    return notes
 
 
 def _is_stacktrace_attachment_filename(file_name: str | None) -> bool:
@@ -912,6 +980,8 @@ def _build_ticket_trouble_assessment(
                     )
                 )
 
+    recent_comment_notes = _extract_recent_comment_notes(comments=comments, requester_id=requester_id)
+
     sorted_flags = sorted(
         flags,
         key=lambda flag: (
@@ -939,6 +1009,7 @@ def _build_ticket_trouble_assessment(
         risk_score=risk_score,
         flags=sorted_flags,
         crash_attachment_summary=crash_attachment_summary,
+        recent_comment_notes=recent_comment_notes,
     )
 
 
