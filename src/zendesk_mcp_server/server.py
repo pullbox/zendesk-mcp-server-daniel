@@ -125,9 +125,16 @@ Required output:
    - Replication path video:
    - Other crash-related attachments:
    Use exact attachment filenames when available. Otherwise write "Not found".
-5. Process Review
+5. Tom Tovar Comment Check
+   Report each item on its own line:
+   - Tom commented:
+   - First Tom comment:
+   - Latest Tom comment:
+   - Tom comment summary:
+   Use ticket metadata fields (tom_tovar_*) and comments as evidence.
+6. Process Review
    List concrete observations about process compliance or non-compliance based on evidence from the ticket and comments.
-6. Compliance Score
+7. Compliance Score
    Give a score from 0 to 100.
    - 90-100: strong evidence of compliant handling
    - 70-89: mostly compliant with minor gaps
@@ -451,10 +458,12 @@ class TicketTroubleAssessment(BaseModel):
     flags: list[TicketTroubleFlag]
     crash_attachment_summary: CrashAttachmentSummary | None = None
     recent_comment_notes: list[str] = Field(default_factory=list)
+    tom: str = "☐"
     tom_tovar_commented: bool = False
     tom_tovar_comment_marker: str | None = None
     tom_tovar_comment_count: int = 0
     tom_tovar_latest_comment_at: str | None = None
+    tom_tovar_comment_summary: str | None = None
 
 
 class ScanTicketsInTroubleResult(BaseModel):
@@ -575,17 +584,39 @@ def _build_tom_tovar_comment_metadata(comments: list[dict[str, Any]]) -> dict[st
                 tom_comments.append(comment)
         except (TypeError, ValueError):
             continue
+    tom_comments_sorted = sorted(
+        tom_comments,
+        key=lambda c: _parse_iso_datetime(c.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc),
+    )
+    first_comment_at = tom_comments_sorted[0].get("created_at") if tom_comments_sorted else None
     latest_comment_at = None
+    latest_comment_summary = None
     if tom_comments:
-        latest_comment_at = max(
-            tom_comments,
-            key=lambda c: _parse_iso_datetime(c.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc),
-        ).get("created_at")
+        latest_comment = tom_comments_sorted[-1]
+        latest_comment_at = latest_comment.get("created_at")
+        latest_text = str(latest_comment.get("body") or "").strip() or _strip_html(latest_comment.get("html_body"))
+        latest_text = re.sub(r"\s+", " ", latest_text).strip()
+        if latest_text:
+            snippet = latest_text[:160].rstrip()
+            if len(latest_text) > 160:
+                snippet = f"{snippet}..."
+            latest_comment_summary = (
+                f"Tom commented {len(tom_comments)} time(s); "
+                f"first={first_comment_at or 'Not found'}, latest={latest_comment_at or 'Not found'}; "
+                f"latest note: {snippet}"
+            )
+        else:
+            latest_comment_summary = (
+                f"Tom commented {len(tom_comments)} time(s); "
+                f"first={first_comment_at or 'Not found'}, latest={latest_comment_at or 'Not found'}."
+            )
     return {
         "tom_tovar_commented": bool(tom_comments),
         "tom_tovar_comment_marker": TOM_TOVAR_COMMENT_MARKER if tom_comments else None,
         "tom_tovar_comment_count": len(tom_comments),
+        "tom_tovar_first_comment_at": first_comment_at,
         "tom_tovar_latest_comment_at": latest_comment_at,
+        "tom_tovar_comment_summary": latest_comment_summary,
     }
 
 
@@ -1098,10 +1129,12 @@ def _build_ticket_trouble_assessment(
         flags=sorted_flags,
         crash_attachment_summary=crash_attachment_summary,
         recent_comment_notes=recent_comment_notes,
+        tom="☑" if tom_tovar_comment_metadata["tom_tovar_commented"] else "☐",
         tom_tovar_commented=tom_tovar_comment_metadata["tom_tovar_commented"],
         tom_tovar_comment_marker=tom_tovar_comment_metadata["tom_tovar_comment_marker"],
         tom_tovar_comment_count=tom_tovar_comment_metadata["tom_tovar_comment_count"],
         tom_tovar_latest_comment_at=tom_tovar_comment_metadata["tom_tovar_latest_comment_at"],
+        tom_tovar_comment_summary=tom_tovar_comment_metadata["tom_tovar_comment_summary"],
     )
 
 
@@ -1257,6 +1290,8 @@ def get_ticket_summary(
             f"{assessment.tom_tovar_comment_marker} "
             f"(count={assessment.tom_tovar_comment_count}, latest={assessment.tom_tovar_latest_comment_at or 'Not found'})"
         )
+        if assessment.tom_tovar_comment_summary:
+            alert_lines.append(f"Tom Summary: {assessment.tom_tovar_comment_summary}")
     crash_attachments = assessment.crash_attachment_summary
     if crash_attachments is not None:
         alert_lines.append(
