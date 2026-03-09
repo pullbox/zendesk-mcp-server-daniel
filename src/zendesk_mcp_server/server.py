@@ -593,6 +593,64 @@ def _extract_recent_comment_notes(comments: list[dict[str, Any]], requester_id: 
     return notes
 
 
+def _extract_merged_ticket_id_from_comment(comment: dict[str, Any]) -> int | None:
+    text = " ".join(
+        filter(
+            None,
+            [
+                str(comment.get("body") or ""),
+                _strip_html(comment.get("html_body")),
+            ],
+        )
+    )
+    match = re.search(r"merged\s+into\s+request\s*#\s*(\d+)", text, re.IGNORECASE)
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
+
+
+def _resolve_merged_ticket_reference(
+    ticket_id: int,
+    ticket: dict[str, Any],
+    comments: list[dict[str, Any]],
+) -> tuple[int, dict[str, Any], list[dict[str, Any]], str | None]:
+    status = str(ticket.get("status", "")).lower()
+    if status not in {"solved", "closed"} or not comments:
+        return ticket_id, ticket, comments, None
+
+    last_comment = max(
+        comments,
+        key=lambda c: _parse_iso_datetime(c.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc),
+    )
+    referenced_ticket_id = _extract_merged_ticket_id_from_comment(last_comment)
+    if referenced_ticket_id is None or referenced_ticket_id == ticket_id:
+        return ticket_id, ticket, comments, None
+
+    try:
+        referenced_ticket = _prepare_ticket_payload(referenced_ticket_id)
+        referenced_comments = zendesk_client.get_ticket_comments(referenced_ticket_id)
+        return (
+            referenced_ticket_id,
+            referenced_ticket,
+            referenced_comments,
+            (
+                f"Ticket {ticket_id} appears merged into request #{referenced_ticket_id}; "
+                "using referenced ticket evidence."
+            ),
+        )
+    except Exception as exc:
+        logger.warning(
+            "Failed to resolve merged ticket reference from %s to %s: %s",
+            ticket_id,
+            referenced_ticket_id,
+            exc,
+        )
+        return ticket_id, ticket, comments, None
+
+
 def _is_stacktrace_attachment_filename(file_name: str | None) -> bool:
     if not file_name:
         return False
@@ -1139,6 +1197,11 @@ def get_ticket_summary(
 ) -> str:
     ticket = _prepare_ticket_payload(ticket_id)
     comments = zendesk_client.get_ticket_comments(ticket_id)
+    resolved_ticket_id, ticket, comments, merge_note = _resolve_merged_ticket_reference(
+        ticket_id=ticket_id,
+        ticket=ticket,
+        comments=comments,
+    )
     assessment = _build_ticket_trouble_assessment(
         ticket=ticket,
         comments=comments,
@@ -1149,9 +1212,12 @@ def get_ticket_summary(
     alert_lines = [
         "",
         "## Trouble Scan",
+        f"Reviewed Ticket ID: {resolved_ticket_id}",
         f"In Trouble: {'Yes' if assessment.in_trouble else 'No'}",
         f"Risk Score: {assessment.risk_score}",
     ]
+    if merge_note:
+        alert_lines.append(f"Note: {merge_note}")
     crash_attachments = assessment.crash_attachment_summary
     if crash_attachments is not None:
         alert_lines.append(
@@ -1188,13 +1254,22 @@ def review_ticket(
 ) -> str:
     ticket = _prepare_ticket_payload(ticket_id)
     comments = zendesk_client.get_ticket_comments(ticket_id)
-    attachment_summary = _build_crash_attachment_summary(comments=comments, requester_id=ticket.get("requester_id"))
-    return build_ticket_analysis_input(
+    resolved_ticket_id, ticket, comments, merge_note = _resolve_merged_ticket_reference(
         ticket_id=ticket_id,
         ticket=ticket,
         comments=comments,
+    )
+    if merge_note:
+        ticket["merge_reference_note"] = merge_note
+    if resolved_ticket_id != ticket_id:
+        ticket["merged_from_ticket_id"] = ticket_id
+    attachment_summary = _build_crash_attachment_summary(comments=comments, requester_id=ticket.get("requester_id"))
+    return build_ticket_analysis_input(
+        ticket_id=resolved_ticket_id,
+        ticket=ticket,
+        comments=comments,
         attachment_evidence_summary=attachment_summary.model_dump(),
-        rubric=TICKET_ANALYSIS_TEMPLATE.format(ticket_id=ticket_id, ticket_link=_ticket_link(ticket_id)),
+        rubric=TICKET_ANALYSIS_TEMPLATE.format(ticket_id=resolved_ticket_id, ticket_link=_ticket_link(resolved_ticket_id)),
     )
 
 
@@ -1512,9 +1587,18 @@ def review_random_solved_tickets_for_agent(
             continue
         ticket = _prepare_ticket_payload(ticket_id)
         comments = zendesk_client.get_ticket_comments(ticket_id)
+        resolved_ticket_id, ticket, comments, merge_note = _resolve_merged_ticket_reference(
+            ticket_id=ticket_id,
+            ticket=ticket,
+            comments=comments,
+        )
+        if merge_note:
+            ticket["merge_reference_note"] = merge_note
+        if resolved_ticket_id != ticket_id:
+            ticket["merged_from_ticket_id"] = ticket_id
         reviews.append(
             {
-                "ticket_id": ticket_id,
+                "ticket_id": resolved_ticket_id,
                 "ticket": ticket,
                 "comments": comments,
                 "attachment_evidence_summary": _build_crash_attachment_summary(

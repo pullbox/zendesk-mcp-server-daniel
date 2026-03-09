@@ -1529,6 +1529,91 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
         self.assertIn("Crash-related attachments available:", summary_text)
         self.assertFalse(response.root.isError)
 
+    def test_review_ticket_resolves_merged_reference_from_last_comment(self) -> None:
+        request = CallToolRequest(
+            method="tools/call",
+            params=CallToolRequestParams(
+                name="review_ticket",
+                arguments={"ticket_id": 9920},
+            ),
+        )
+
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        solved_ticket_payload = {
+            "id": 9920,
+            "subject": "Citi | Android | Old duplicate ticket",
+            "status": "solved",
+            "priority": "normal",
+            "created_at": "2026-03-05T10:00:00Z",
+            "updated_at": "2026-03-05T12:00:00Z",
+            "requester_id": 1001,
+            "tags": [],
+            "custom_fields": {
+                "Status With": "customer",
+                "Support Stage": "resolved",
+                "Release Stage": "n/a",
+            },
+        }
+        solved_comments_payload = [
+            {
+                "author_id": 2002,
+                "public": True,
+                "body": 'This request was closed and merged into request #123456 "Citi | Android | Citi Authenticator".',
+                "html_body": '<p>This request was closed and merged into request #123456 "Citi | Android | Citi Authenticator".</p>',
+                "created_at": "2026-03-05T12:00:00Z",
+                "attachments": [],
+            }
+        ]
+        referenced_ticket_payload = {
+            "id": 123456,
+            "subject": "Citi | Android | Citi Authenticator",
+            "status": "open",
+            "priority": "normal",
+            "created_at": "2026-03-05T11:00:00Z",
+            "updated_at": "2026-03-05T12:10:00Z",
+            "requester_id": 1001,
+            "tags": [],
+            "custom_fields": {
+                "Status With": "support",
+                "Support Stage": "investigation",
+                "Release Stage": "n/a",
+            },
+        }
+        referenced_comments_payload = [
+            {
+                "author_id": 2002,
+                "public": True,
+                "body": "Continuing investigation on the merged ticket.",
+                "html_body": "<p>Continuing investigation on the merged ticket.</p>",
+                "created_at": "2026-03-05T12:05:00Z",
+                "attachments": [],
+            }
+        ]
+
+        with (
+            patch.object(
+                server_module,
+                "_prepare_ticket_payload",
+                side_effect=lambda tid: solved_ticket_payload if tid == 9920 else referenced_ticket_payload,
+            ) as mock_prepare_ticket_payload,
+            patch.object(server_module, "zendesk_client") as mock_client,
+        ):
+            mock_client.get_ticket_comments.side_effect = (
+                lambda tid: solved_comments_payload if tid == 9920 else referenced_comments_payload
+            )
+
+            handler = server_module.mcp._mcp_server.request_handlers[CallToolRequest]
+            response = asyncio.run(handler(request))
+
+        payload = json.loads(response.root.content[0].text.split("Use the following evidence only.\n\n", 1)[1])
+        self.assertEqual(payload["ticket_id"], 123456)
+        self.assertEqual(payload["ticket"]["id"], 123456)
+        self.assertEqual(payload["comments"], referenced_comments_payload)
+        self.assertEqual(mock_prepare_ticket_payload.call_count, 2)
+        self.assertFalse(response.root.isError)
+
     def test_crash_ticket_non_matching_attachment_filename_still_flags_process_gap(self) -> None:
         with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
             server_module = importlib.import_module("zendesk_mcp_server.server")
