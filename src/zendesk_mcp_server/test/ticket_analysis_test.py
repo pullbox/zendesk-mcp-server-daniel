@@ -43,6 +43,7 @@ class TestTicketAnalysisInput(unittest.TestCase):
         payload = json.loads(text.split("Use the following evidence only.\n\n", 1)[1])
         self.assertEqual(payload["ticket"]["id"], 42265)
         self.assertEqual(payload["comments"][0]["author_id"], 10)
+        self.assertEqual(payload["comments"][0]["created_at"], "2026-02-24 05:00:00 EST")
         self.assertEqual(payload["comments"][0]["attachments"][0]["file_name"], "crash.ips")
         self.assertEqual(payload["attachment_evidence_summary"], {})
 
@@ -78,6 +79,29 @@ class TestTicketAnalysisInput(unittest.TestCase):
         self.assertEqual(payload["reviews"][0]["comments"][0]["attachments"][0]["file_name"], "android.log")
         self.assertEqual(payload["reviews"][0]["ticket_link"], "#100")
         self.assertEqual(payload["reviews"][0]["attachment_evidence_summary"], {})
+
+    def test_build_batch_ticket_review_input_converts_timestamps_to_est(self) -> None:
+        text = build_batch_ticket_review_input(
+            reviews=[
+                {
+                    "ticket_id": 400,
+                    "ticket": {"id": 400, "subject": "With timestamp", "created_at": "2026-03-02T13:00:00Z"},
+                    "comments": [
+                        {
+                            "id": 7,
+                            "author_id": 88,
+                            "created_at": "2026-03-02T14:30:00Z",
+                            "body": "Time check",
+                        }
+                    ],
+                }
+            ],
+            rubric_template="Review ticket #{ticket_id}.",
+        )
+
+        payload = json.loads(text.split("\n\n", 1)[1])
+        self.assertEqual(payload["reviews"][0]["ticket"]["created_at"], "2026-03-02 08:00:00 EST")
+        self.assertEqual(payload["reviews"][0]["comments"][0]["created_at"], "2026-03-02 09:30:00 EST")
 
     def test_build_batch_ticket_review_input_supports_ticket_link_placeholder(self) -> None:
         text = build_batch_ticket_review_input(

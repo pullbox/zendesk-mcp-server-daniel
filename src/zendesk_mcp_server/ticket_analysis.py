@@ -1,5 +1,34 @@
 import json
+from datetime import datetime, timedelta, timezone
 from typing import Any
+
+EST_TIMEZONE = timezone(timedelta(hours=-5), name="EST")
+TIMESTAMP_FIELD_SUFFIXES = ("_at",)
+TIMESTAMP_FIELD_NAMES = {
+    "created",
+    "updated",
+    "timestamp",
+}
+
+
+def _format_est_timestamp(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return value
+    return dt.astimezone(EST_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S EST")
+
+
+def _convert_timestamp_fields(value: Any, key: str | None = None) -> Any:
+    if isinstance(value, list):
+        return [_convert_timestamp_fields(item) for item in value]
+    if isinstance(value, dict):
+        return {k: _convert_timestamp_fields(v, key=k) for k, v in value.items()}
+    if key and (key.endswith(TIMESTAMP_FIELD_SUFFIXES) or key in TIMESTAMP_FIELD_NAMES):
+        return _format_est_timestamp(value)
+    return value
 
 
 def build_ticket_analysis_input(
@@ -32,9 +61,9 @@ def build_ticket_analysis_input(
 
     payload = {
         "ticket_id": ticket_id,
-        "ticket": ticket,
-        "comments": compact_comments,
-        "attachment_evidence_summary": attachment_evidence_summary or {},
+        "ticket": _convert_timestamp_fields(ticket),
+        "comments": _convert_timestamp_fields(compact_comments),
+        "attachment_evidence_summary": _convert_timestamp_fields(attachment_evidence_summary or {}),
     }
 
     return (
@@ -59,8 +88,8 @@ def build_batch_ticket_review_input(
                 "ticket_id": ticket_id,
                 "ticket_link": ticket_link,
                 "rubric": rubric_template.format(ticket_id=ticket_id, ticket_link=ticket_link).strip(),
-                "ticket": review["ticket"],
-                "comments": [
+                "ticket": _convert_timestamp_fields(review["ticket"]),
+                "comments": _convert_timestamp_fields([
                     {
                         "id": comment.get("id"),
                         "author_id": comment.get("author_id"),
@@ -79,8 +108,10 @@ def build_batch_ticket_review_input(
                         ],
                     }
                     for comment in review["comments"]
-                ],
-                "attachment_evidence_summary": review.get("attachment_evidence_summary") or {},
+                ]),
+                "attachment_evidence_summary": _convert_timestamp_fields(
+                    review.get("attachment_evidence_summary") or {}
+                ),
             }
         )
 
