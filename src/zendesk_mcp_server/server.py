@@ -451,6 +451,10 @@ class TicketTroubleAssessment(BaseModel):
     flags: list[TicketTroubleFlag]
     crash_attachment_summary: CrashAttachmentSummary | None = None
     recent_comment_notes: list[str] = Field(default_factory=list)
+    tom_tovar_commented: bool = False
+    tom_tovar_comment_marker: str | None = None
+    tom_tovar_comment_count: int = 0
+    tom_tovar_latest_comment_at: str | None = None
 
 
 class ScanTicketsInTroubleResult(BaseModel):
@@ -536,6 +540,8 @@ CRASH_ATTACHMENT_KEYWORDS = (
 )
 VIDEO_ATTACHMENT_EXTENSIONS = (".mp4", ".mov", ".m4v", ".avi", ".webm", ".mkv")
 IMAGE_ATTACHMENT_EXTENSIONS = (".jpg", ".jpeg", ".png", ".heic", ".heif", ".gif", ".bmp", ".webp")
+TOM_TOVAR_USER_ID = 4293579406
+TOM_TOVAR_COMMENT_MARKER = "⚠️ Tom Tovar (id=4293579406) commented on this ticket."
 
 
 def _parse_iso_datetime(value: str | None) -> datetime | None:
@@ -558,6 +564,29 @@ def _strip_html(text: str | None) -> str:
     if not text:
         return ""
     return re.sub(r"<[^>]+>", " ", text)
+
+
+def _build_tom_tovar_comment_metadata(comments: list[dict[str, Any]]) -> dict[str, Any]:
+    tom_comments: list[dict[str, Any]] = []
+    for comment in comments:
+        author_id = comment.get("author_id")
+        try:
+            if author_id is not None and int(author_id) == TOM_TOVAR_USER_ID:
+                tom_comments.append(comment)
+        except (TypeError, ValueError):
+            continue
+    latest_comment_at = None
+    if tom_comments:
+        latest_comment_at = max(
+            tom_comments,
+            key=lambda c: _parse_iso_datetime(c.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc),
+        ).get("created_at")
+    return {
+        "tom_tovar_commented": bool(tom_comments),
+        "tom_tovar_comment_marker": TOM_TOVAR_COMMENT_MARKER if tom_comments else None,
+        "tom_tovar_comment_count": len(tom_comments),
+        "tom_tovar_latest_comment_at": latest_comment_at,
+    }
 
 
 def _extract_recent_comment_notes(comments: list[dict[str, Any]], requester_id: int | None) -> list[str]:
@@ -1055,6 +1084,7 @@ def _build_ticket_trouble_assessment(
             for flag in sorted_flags
         ),
     )
+    tom_tovar_comment_metadata = _build_tom_tovar_comment_metadata(comments)
 
     return TicketTroubleAssessment(
         ticket_id=ticket_id,
@@ -1068,6 +1098,10 @@ def _build_ticket_trouble_assessment(
         flags=sorted_flags,
         crash_attachment_summary=crash_attachment_summary,
         recent_comment_notes=recent_comment_notes,
+        tom_tovar_commented=tom_tovar_comment_metadata["tom_tovar_commented"],
+        tom_tovar_comment_marker=tom_tovar_comment_metadata["tom_tovar_comment_marker"],
+        tom_tovar_comment_count=tom_tovar_comment_metadata["tom_tovar_comment_count"],
+        tom_tovar_latest_comment_at=tom_tovar_comment_metadata["tom_tovar_latest_comment_at"],
     )
 
 
@@ -1218,6 +1252,11 @@ def get_ticket_summary(
     ]
     if merge_note:
         alert_lines.append(f"Note: {merge_note}")
+    if assessment.tom_tovar_commented:
+        alert_lines.append(
+            f"{assessment.tom_tovar_comment_marker} "
+            f"(count={assessment.tom_tovar_comment_count}, latest={assessment.tom_tovar_latest_comment_at or 'Not found'})"
+        )
     crash_attachments = assessment.crash_attachment_summary
     if crash_attachments is not None:
         alert_lines.append(
@@ -1263,6 +1302,7 @@ def review_ticket(
         ticket["merge_reference_note"] = merge_note
     if resolved_ticket_id != ticket_id:
         ticket["merged_from_ticket_id"] = ticket_id
+    ticket.update(_build_tom_tovar_comment_metadata(comments))
     attachment_summary = _build_crash_attachment_summary(comments=comments, requester_id=ticket.get("requester_id"))
     return build_ticket_analysis_input(
         ticket_id=resolved_ticket_id,
@@ -1596,6 +1636,7 @@ def review_random_solved_tickets_for_agent(
             ticket["merge_reference_note"] = merge_note
         if resolved_ticket_id != ticket_id:
             ticket["merged_from_ticket_id"] = ticket_id
+        ticket.update(_build_tom_tovar_comment_metadata(comments))
         reviews.append(
             {
                 "ticket_id": resolved_ticket_id,
