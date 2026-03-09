@@ -732,13 +732,19 @@ def _build_ticket_trouble_assessment(
             break
 
     if created_at is not None and first_public_agent_response_at is None:
-        flags.append(
-            TicketTroubleFlag(
-                code="missing_initial_response",
-                severity="high",
-                message="No public agent response found.",
+        reference_time = updated_at or datetime.now(timezone.utc)
+        response_delay_minutes = int(max((reference_time - created_at).total_seconds(), 0) // 60)
+        if response_delay_minutes > initial_response_sla_minutes:
+            flags.append(
+                TicketTroubleFlag(
+                    code="missing_initial_response",
+                    severity="high",
+                    message=(
+                        "No public agent response found after "
+                        f"{response_delay_minutes}m (SLA {initial_response_sla_minutes}m)."
+                    ),
+                )
             )
-        )
     elif created_at is not None and first_public_agent_response_at is not None:
         response_minutes = int((first_public_agent_response_at - created_at).total_seconds() // 60)
         if response_minutes > initial_response_sla_minutes:
@@ -1259,6 +1265,13 @@ def scan_tickets_in_trouble(
             initial_response_sla_minutes=initial_response_sla_minutes,
             high_priority_stale_hours=high_priority_stale_hours,
         )
+        status_lower = str(full_ticket.get("status", "")).lower()
+        if status_lower == "new":
+            has_overdue_missing_initial_response = any(
+                flag.code == "missing_initial_response" for flag in assessment.flags
+            )
+            if not has_overdue_missing_initial_response:
+                continue
         assessments.append(assessment)
 
     assessments.sort(
