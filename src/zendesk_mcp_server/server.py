@@ -1472,12 +1472,14 @@ def scan_tickets_in_trouble(
 
     assessments: list[TicketTroubleAssessment] = []
     for ticket in list_result.get("tickets", []):
-        if str(ticket.get("status", "")).lower() == "solved":
+        if str(ticket.get("status", "")).lower() in {"solved", "closed"}:
             continue
         ticket_id = ticket.get("id")
         if ticket_id is None:
             continue
         full_ticket = _prepare_ticket_payload(int(ticket_id))
+        if str(full_ticket.get("status", "")).lower() in {"solved", "closed"}:
+            continue
         comments = zendesk_client.get_ticket_comments(int(ticket_id))
         assessment = _build_ticket_trouble_assessment(
             ticket=full_ticket,

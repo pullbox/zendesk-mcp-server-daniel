@@ -598,7 +598,7 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
         self.assertEqual(json.loads(response.root.content[0].text), expected_payload)
         self.assertFalse(response.root.isError)
 
-    def test_scan_tickets_in_trouble_excludes_solved_tickets_from_scan(self) -> None:
+    def test_scan_tickets_in_trouble_excludes_resolved_tickets_from_scan(self) -> None:
         list_payload = {
             "tickets": [
                 {
@@ -610,9 +610,19 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
                     "updated_at": "2026-03-05T19:30:00Z",
                     "stale_age_hours": 9,
                     "stale_age_days": 0,
-                }
+                },
+                {
+                    "id": 778,
+                    "subject": "ACME | Android | Closed duplicate",
+                    "status": "closed",
+                    "priority": "high",
+                    "created_at": "2026-03-05T10:00:00Z",
+                    "updated_at": "2026-03-05T19:30:00Z",
+                    "stale_age_hours": 9,
+                    "stale_age_days": 0,
+                },
             ],
-            "count": 1,
+            "count": 2,
             "page": 1,
             "per_page": 25,
             "sort_by": "created_at",
@@ -650,6 +660,66 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
         self.assertEqual(structured["in_trouble_count"], 0)
         self.assertEqual(structured["tickets"], [])
         mock_prepare_ticket_payload.assert_not_called()
+        mock_client.get_ticket_comments.assert_not_called()
+        self.assertFalse(response.root.isError)
+
+    def test_scan_tickets_in_trouble_excludes_ticket_closed_by_fetch_time(self) -> None:
+        list_payload = {
+            "tickets": [
+                {"id": 779, "subject": "ACME | iOS | Login issue", "status": "open", "priority": "normal"},
+            ],
+            "count": 1,
+            "page": 1,
+            "per_page": 25,
+            "sort_by": "created_at",
+            "sort_order": "desc",
+            "filters": {
+                "created_last_hours": 4,
+                "exclude_internal": True,
+            },
+            "has_more": False,
+            "next_page": None,
+            "previous_page": None,
+        }
+        full_ticket_payload = {
+            "id": 779,
+            "subject": "ACME | iOS | Login issue",
+            "status": "closed",
+            "priority": "normal",
+            "created_at": "2026-03-05T10:00:00Z",
+            "updated_at": "2026-03-05T10:20:00Z",
+            "requester_id": 1001,
+            "tags": [],
+            "custom_fields": {
+                "Status With": "customer",
+                "Support Stage": "resolved",
+                "Release Stage": "n/a",
+            },
+        }
+        request = CallToolRequest(
+            method="tools/call",
+            params=CallToolRequestParams(
+                name="scan_tickets_in_trouble",
+                arguments={"created_last_hours": 4, "per_page": 25},
+            ),
+        )
+
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        with (
+            patch.object(server_module, "zendesk_client") as mock_client,
+            patch.object(server_module, "_prepare_ticket_payload", return_value=full_ticket_payload),
+        ):
+            mock_client.get_tickets.return_value = list_payload
+
+            handler = server_module.mcp._mcp_server.request_handlers[CallToolRequest]
+            response = asyncio.run(handler(request))
+
+        structured = response.root.structuredContent
+        self.assertEqual(structured["scanned_count"], 0)
+        self.assertEqual(structured["in_trouble_count"], 0)
+        self.assertEqual(structured["tickets"], [])
         mock_client.get_ticket_comments.assert_not_called()
         self.assertFalse(response.root.isError)
 
