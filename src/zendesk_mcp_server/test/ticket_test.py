@@ -1657,6 +1657,175 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
         self.assertTrue(assessment.crash_attachment_summary.has_replication_video)
         self.assertIn("screen_recording.mp4", assessment.crash_attachment_summary.replication_videos)
 
+    def test_crash_ticket_generic_image_attachment_does_not_count_as_crash_evidence(self) -> None:
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        ticket = {
+            "id": 9903,
+            "subject": "ACME | Android | Crash after login",
+            "status": "open",
+            "priority": "high",
+            "created_at": "2026-03-05T10:00:00Z",
+            "updated_at": "2026-03-05T10:30:00Z",
+            "requester_id": 1001,
+            "tags": ["crash_detected"],
+            "custom_fields": {
+                "Status With": "support",
+                "Support Stage": "investigation",
+                "Release Stage": "n/a",
+            },
+        }
+        comments = [
+            {
+                "author_id": 2002,
+                "public": True,
+                "body": "Thanks, we are investigating.",
+                "html_body": "<p>Thanks, we are investigating.</p>",
+                "created_at": "2026-03-05T10:05:00Z",
+                "attachments": [{"file_name": "screenshot.png"}],
+            }
+        ]
+
+        assessment = server_module._build_ticket_trouble_assessment(
+            ticket=ticket,
+            comments=comments,
+            initial_response_sla_minutes=60,
+            high_priority_stale_hours=8,
+        )
+
+        flag_codes = [flag.code for flag in assessment.flags]
+        self.assertIn("crash_process_gap", flag_codes)
+        self.assertIsNotNone(assessment.crash_attachment_summary)
+        self.assertFalse(assessment.crash_attachment_summary.has_crash_related_attachments)
+
+    def test_crash_ticket_generic_log_attachment_does_not_count_as_crash_evidence(self) -> None:
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        ticket = {
+            "id": 9904,
+            "subject": "ACME | Android | Crash after login",
+            "status": "open",
+            "priority": "high",
+            "created_at": "2026-03-05T10:00:00Z",
+            "updated_at": "2026-03-05T10:30:00Z",
+            "requester_id": 1001,
+            "tags": ["crash_detected"],
+            "custom_fields": {
+                "Status With": "support",
+                "Support Stage": "investigation",
+                "Release Stage": "n/a",
+            },
+        }
+        comments = [
+            {
+                "author_id": 2002,
+                "public": True,
+                "body": "Thanks, we are investigating.",
+                "html_body": "<p>Thanks, we are investigating.</p>",
+                "created_at": "2026-03-05T10:05:00Z",
+                "attachments": [{"file_name": "application.log"}],
+            }
+        ]
+
+        assessment = server_module._build_ticket_trouble_assessment(
+            ticket=ticket,
+            comments=comments,
+            initial_response_sla_minutes=60,
+            high_priority_stale_hours=8,
+        )
+
+        flag_codes = [flag.code for flag in assessment.flags]
+        self.assertIn("crash_process_gap", flag_codes)
+        self.assertIsNotNone(assessment.crash_attachment_summary)
+        self.assertFalse(assessment.crash_attachment_summary.has_crash_related_attachments)
+
+    def test_crash_ticket_generic_zip_attachment_does_not_count_as_crash_evidence(self) -> None:
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        ticket = {
+            "id": 9908,
+            "subject": "ACME | Android | Crash after login",
+            "status": "open",
+            "priority": "high",
+            "created_at": "2026-03-05T10:00:00Z",
+            "updated_at": "2026-03-05T10:30:00Z",
+            "requester_id": 1001,
+            "tags": ["crash_detected"],
+            "custom_fields": {
+                "Status With": "support",
+                "Support Stage": "investigation",
+                "Release Stage": "n/a",
+            },
+        }
+        comments = [
+            {
+                "author_id": 2002,
+                "public": True,
+                "body": "Thanks, we are investigating.",
+                "html_body": "<p>Thanks, we are investigating.</p>",
+                "created_at": "2026-03-05T10:05:00Z",
+                "attachments": [{"file_name": "logs.zip"}],
+            }
+        ]
+
+        assessment = server_module._build_ticket_trouble_assessment(
+            ticket=ticket,
+            comments=comments,
+            initial_response_sla_minutes=60,
+            high_priority_stale_hours=8,
+        )
+
+        flag_codes = [flag.code for flag in assessment.flags]
+        self.assertIn("crash_process_gap", flag_codes)
+        self.assertIsNotNone(assessment.crash_attachment_summary)
+        self.assertFalse(assessment.crash_attachment_summary.has_crash_related_attachments)
+
+    def test_crash_ticket_log_attachment_with_crash_filename_counts_as_crash_evidence(self) -> None:
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        ticket = {
+            "id": 9909,
+            "subject": "ACME | Android | Crash after login",
+            "status": "open",
+            "priority": "high",
+            "created_at": "2026-03-05T10:00:00Z",
+            "updated_at": "2026-03-05T10:30:00Z",
+            "requester_id": 1001,
+            "tags": ["crash_detected"],
+            "custom_fields": {
+                "Status With": "support",
+                "Support Stage": "investigation",
+                "Release Stage": "n/a",
+            },
+        }
+        comments = [
+            {
+                "author_id": 2002,
+                "public": True,
+                "body": "Attached requested crash log.",
+                "html_body": "<p>Attached requested crash log.</p>",
+                "created_at": "2026-03-05T10:05:00Z",
+                "attachments": [{"file_name": "android_crash.log"}],
+            }
+        ]
+
+        assessment = server_module._build_ticket_trouble_assessment(
+            ticket=ticket,
+            comments=comments,
+            initial_response_sla_minutes=60,
+            high_priority_stale_hours=8,
+        )
+
+        flag_codes = [flag.code for flag in assessment.flags]
+        self.assertNotIn("crash_process_gap", flag_codes)
+        self.assertIsNotNone(assessment.crash_attachment_summary)
+        self.assertTrue(assessment.crash_attachment_summary.has_crash_related_attachments)
+        self.assertIn("android_crash.log", assessment.crash_attachment_summary.crash_related_files)
+
     def test_sample_solved_tickets_for_agent_is_deterministic_with_seed(self) -> None:
         client_payload = {
             "tickets": [

@@ -157,7 +157,7 @@ Rules:
 - Do not mix evidence sources when drawing compliance conclusions; customer context about their own situation cannot be used to evaluate or excuse agent actions.
 - For Escalated Tickets, if the customer has not explicitly confirmed the solution worked, do not mark the resolution as customer-acknowledged.
 - Crash/ANR ticket rule: if the ticket has tag "crash_detected" or "anr_yes", verify crash/ANR evidence handling.
-- For crash_detected/anr_yes tickets, treat stacktrace evidence as present only when there is explicit stacktrace content in comments or a relevant crash attachment (for example .ips, .crash, .log, .txt, .dmp).
+- For crash_detected/anr_yes tickets, treat stacktrace evidence as present only when there is explicit stacktrace content in comments or a relevant crash attachment (for example .ips, .crash, .dmp, or filenames that explicitly indicate a crash log/stacktrace).
 - If a crash_detected/anr_yes ticket has no stacktrace evidence, verify the assigned support engineer asked the customer for stacktrace/crash log details. If no such request appears in comments, flag this as a process gap.
 - For crash_detected/anr_yes tickets, enforce stacktrace request timeliness: if stacktrace evidence is not already present, the first explicit support request for stacktrace/crash logs should occur within 1 hour of crash identification.
 - For this check, infer crash identification time from the earliest explicit crash evidence in the ticket/comments; if the ticket already has tag "crash_detected" or "anr_yes", use ticket created timestamp when no earlier signal is available.
@@ -738,18 +738,17 @@ def _classify_crash_attachment(file_name: str | None, content_type: str | None) 
 
     is_video = lowered_name.endswith(VIDEO_ATTACHMENT_EXTENSIONS) or lowered_content_type.startswith("video/")
     is_image = lowered_name.endswith(IMAGE_ATTACHMENT_EXTENSIONS) or lowered_content_type.startswith("image/")
+    has_crash_keyword = any(keyword in lowered_name for keyword in CRASH_ATTACHMENT_KEYWORDS)
 
     if _is_stacktrace_attachment_filename(lowered_name):
         return "stacktrace"
     if is_video:
         return "replication_video"
-    if lowered_name.endswith(".log") or " log" in lowered_name or "logs" in lowered_name:
+    if lowered_name.endswith(".log") and has_crash_keyword:
         return "crash_log"
-    if is_image and any(keyword in lowered_name for keyword in CRASH_ATTACHMENT_KEYWORDS):
+    if is_image and has_crash_keyword:
         return "crash_screenshot"
-    if is_image:
-        return "crash_screenshot"
-    if any(keyword in lowered_name for keyword in CRASH_ATTACHMENT_KEYWORDS):
+    if has_crash_keyword:
         return "crash_artifact"
     return None
 
