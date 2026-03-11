@@ -2003,6 +2003,49 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
         self.assertIn("production_user_impact", summary_text)
         self.assertFalse(response.root.isError)
 
+    def test_get_ticket_summary_main_table_highlights_production_issue(self) -> None:
+        request = CallToolRequest(
+            method="tools/call",
+            params=CallToolRequestParams(
+                name="get_ticket_summary",
+                arguments={"ticket_id": 9913},
+            ),
+        )
+
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        ticket_payload = {
+            "id": 9913,
+            "subject": "ACME | iOS | Production login failures",
+            "description": "Users are blocked in production.",
+            "status": "open",
+            "priority": "normal",
+            "created_at": "2026-03-05T10:00:00Z",
+            "updated_at": "2026-03-05T10:10:00Z",
+            "requester_id": 1001,
+            "tags": [],
+            "custom_fields": {
+                "Status With": "support",
+                "Support Stage": "investigation",
+                "Release Stage": "Production",
+            },
+            "ticket_url": "https://appdomesupport.zendesk.com/agent/tickets/9913",
+            "ticket_link": "[9913](https://appdomesupport.zendesk.com/agent/tickets/9913)",
+        }
+
+        with (
+            patch.object(server_module, "_prepare_ticket_payload", return_value=ticket_payload),
+            patch.object(server_module, "zendesk_client") as mock_client,
+        ):
+            mock_client.get_ticket_comments.return_value = []
+            handler = server_module.mcp._mcp_server.request_handlers[CallToolRequest]
+            response = asyncio.run(handler(request))
+
+        summary_text = response.root.content[0].text
+        self.assertIn("| Production Issue | Yes |", summary_text)
+        self.assertFalse(response.root.isError)
+
     def test_review_ticket_resolves_merged_reference_from_last_comment(self) -> None:
         request = CallToolRequest(
             method="tools/call",
@@ -2360,6 +2403,116 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
         self.assertFalse(structured["truncated"])
         self.assertTrue(structured["exclude_api_created"])
         self.assertEqual(structured["excluded_api_created_count"], 0)
+        self.assertFalse(response.root.isError)
+
+    def test_review_random_solved_tickets_for_agent_highlights_production_tickets(self) -> None:
+        request = CallToolRequest(
+            method="tools/call",
+            params=CallToolRequestParams(
+                name="review_random_solved_tickets_for_agent",
+                arguments={
+                    "agent": "pedro",
+                    "solved_after": "2026-02-01",
+                    "solved_before": "2026-03-01",
+                    "count": 2,
+                    "seed": 3,
+                    "max_pool": 50,
+                },
+            ),
+        )
+
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        sample_payload = server_module.RandomTicketSampleResult.model_validate(
+            {
+                "tickets": [
+                    {
+                        "id": 401,
+                        "ticket_url": "https://appdomesupport.zendesk.com/agent/tickets/401",
+                        "ticket_link": "[401](https://appdomesupport.zendesk.com/agent/tickets/401)",
+                        "subject": "Prod ticket",
+                        "status": "solved",
+                        "priority": "high",
+                    },
+                    {
+                        "id": 402,
+                        "ticket_url": "https://appdomesupport.zendesk.com/agent/tickets/402",
+                        "ticket_link": "[402](https://appdomesupport.zendesk.com/agent/tickets/402)",
+                        "subject": "UAT ticket",
+                        "status": "solved",
+                        "priority": "normal",
+                    },
+                ],
+                "requested_count": 2,
+                "sampled_count": 2,
+                "total_matches": 2,
+                "retrieved_count": 2,
+                "truncated": False,
+                "exclude_api_created": False,
+                "excluded_api_created_count": 0,
+                "agent": "pedro",
+                "solved_after": "2026-02-01",
+                "solved_before": "2026-03-01",
+                "seed": 3,
+            }
+        )
+
+        prod_ticket = {
+            "id": 401,
+            "subject": "ACME | iOS | App Store outage",
+            "description": "Production users are impacted.",
+            "status": "solved",
+            "priority": "high",
+            "created_at": "2026-03-05T10:00:00Z",
+            "updated_at": "2026-03-05T11:00:00Z",
+            "requester_id": 1001,
+            "tags": [],
+            "custom_fields": {
+                "Status With": "support",
+                "Support Stage": "resolved",
+                "Release Stage": "Production",
+            },
+            "ticket_link": "[401](https://appdomesupport.zendesk.com/agent/tickets/401)",
+        }
+        uat_ticket = {
+            "id": 402,
+            "subject": "ACME | iOS | UAT validation issue",
+            "description": "Seen only in UAT testing.",
+            "status": "solved",
+            "priority": "normal",
+            "created_at": "2026-03-05T10:00:00Z",
+            "updated_at": "2026-03-05T11:00:00Z",
+            "requester_id": 1001,
+            "tags": [],
+            "custom_fields": {
+                "Status With": "support",
+                "Support Stage": "resolved",
+                "Release Stage": "Testing / Pre-Release UAT",
+            },
+            "ticket_link": "[402](https://appdomesupport.zendesk.com/agent/tickets/402)",
+        }
+
+        with (
+            patch.object(server_module, "sample_solved_tickets_for_agent", return_value=sample_payload),
+            patch.object(
+                server_module,
+                "_prepare_ticket_payload",
+                side_effect=lambda tid: prod_ticket if tid == 401 else uat_ticket,
+            ),
+            patch.object(server_module, "zendesk_client") as mock_client,
+        ):
+            mock_client.get_ticket_comments.return_value = []
+            handler = server_module.mcp._mcp_server.request_handlers[CallToolRequest]
+            response = asyncio.run(handler(request))
+
+        structured = response.root.structuredContent
+        self.assertEqual(structured["production_ticket_ids"], [401])
+        self.assertEqual(structured["production_ticket_count"], 1)
+        self.assertIn("[401](https://appdomesupport.zendesk.com/agent/tickets/401)", structured["production_ticket_links"])
+        review_packet = json.loads(structured["review_input"].split("\n\n", 1)[1])
+        self.assertTrue(review_packet["reviews"][0]["production_issue"])
+        self.assertFalse(review_packet["reviews"][1]["production_issue"])
         self.assertFalse(response.root.isError)
 
     def test_search_tickets_by_text_tool_emits_structured_content(self) -> None:

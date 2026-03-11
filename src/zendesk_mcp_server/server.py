@@ -271,6 +271,7 @@ def _build_ticket_summary(ticket: dict[str, Any]) -> str:
     custom_fields = ticket.get("custom_fields", {})
     ticket_id = ticket.get("id")
     ticket_link = _ticket_link(ticket_id) or f"#{ticket_id}"
+    production_impact = _build_production_impact_assessment(ticket=ticket, comments=[])
     lines = [
         f"# Ticket {ticket_link} - {ticket.get('subject', 'Untitled')}",
         "",
@@ -279,6 +280,7 @@ def _build_ticket_summary(ticket: dict[str, Any]) -> str:
         f"| Subject | {ticket.get('subject', 'N/A')} |",
         f"| Status | {ticket.get('status', 'N/A')} |",
         f"| Priority | {ticket.get('priority', 'N/A')} |",
+        f"| Production Issue | {'Yes' if production_impact.is_production_issue else 'No'} |",
         f"| Created | {_format_display_datetime(ticket.get('created_at'))} |",
         f"| Last Updated | {_format_display_datetime(ticket.get('updated_at'))} |",
         "",
@@ -409,6 +411,9 @@ class RandomTicketReviewResult(BaseModel):
     sampled_ticket_ids: list[int]
     sampled_ticket_urls: list[str]
     sampled_ticket_links: list[str]
+    production_ticket_ids: list[int] = Field(default_factory=list)
+    production_ticket_links: list[str] = Field(default_factory=list)
+    production_ticket_count: int = 0
     sampled_count: int
     total_matches: int
     retrieved_count: int
@@ -1845,11 +1850,14 @@ def review_random_solved_tickets_for_agent(
         if resolved_ticket_id != ticket_id:
             ticket["merged_from_ticket_id"] = ticket_id
         ticket.update(_build_tom_tovar_comment_metadata(comments))
+        production_impact = _build_production_impact_assessment(ticket=ticket, comments=comments)
+        ticket["production_impact"] = production_impact.model_dump()
         reviews.append(
             {
                 "ticket_id": resolved_ticket_id,
                 "ticket": ticket,
                 "comments": comments,
+                "production_impact": production_impact.model_dump(),
                 "attachment_evidence_summary": _build_crash_attachment_summary(
                     comments=comments,
                     requester_id=ticket.get("requester_id"),
@@ -1867,6 +1875,19 @@ def review_random_solved_tickets_for_agent(
             "sampled_ticket_ids": [review["ticket_id"] for review in reviews],
             "sampled_ticket_urls": [(_ticket_url(review["ticket_id"]) or "") for review in reviews],
             "sampled_ticket_links": [(_ticket_link(review["ticket_id"]) or "") for review in reviews],
+            "production_ticket_ids": [
+                review["ticket_id"]
+                for review in reviews
+                if review.get("production_impact", {}).get("is_production_issue")
+            ],
+            "production_ticket_links": [
+                (_ticket_link(review["ticket_id"]) or "")
+                for review in reviews
+                if review.get("production_impact", {}).get("is_production_issue")
+            ],
+            "production_ticket_count": len(
+                [review for review in reviews if review.get("production_impact", {}).get("is_production_issue")]
+            ),
             "sampled_count": len(reviews),
             "total_matches": sample_result.total_matches,
             "retrieved_count": sample_result.retrieved_count,

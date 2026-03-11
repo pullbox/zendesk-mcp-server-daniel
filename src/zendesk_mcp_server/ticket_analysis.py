@@ -87,6 +87,9 @@ def build_batch_ticket_review_input(
             {
                 "ticket_id": ticket_id,
                 "ticket_link": ticket_link,
+                "production_issue": bool(
+                    ticket_payload.get("production_impact", {}).get("is_production_issue")
+                ),
                 "rubric": rubric_template.format(ticket_id=ticket_id, ticket_link=ticket_link).strip(),
                 "ticket": _convert_timestamp_fields(review["ticket"]),
                 "comments": _convert_timestamp_fields([
