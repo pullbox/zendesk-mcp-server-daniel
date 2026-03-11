@@ -1305,6 +1305,85 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
         self.assertNotIn("meeting_summary_missing", flag_codes)
         self.assertFalse(response.root.isError)
 
+    def test_scan_tickets_in_trouble_does_not_treat_stacktrace_timestamp_as_meeting(self) -> None:
+        list_payload = {
+            "tickets": [
+                {"id": 915, "subject": "ACME | Android | Crash on launch", "status": "open", "priority": "high"},
+            ],
+            "count": 1,
+            "page": 1,
+            "per_page": 25,
+            "sort_by": "created_at",
+            "sort_order": "desc",
+            "filters": {
+                "created_last_hours": 24,
+                "exclude_internal": True,
+            },
+            "has_more": False,
+            "next_page": None,
+            "previous_page": None,
+        }
+        full_ticket_payload = {
+            "id": 915,
+            "subject": "ACME | Android | Crash on launch",
+            "status": "open",
+            "priority": "high",
+            "created_at": "2026-03-05T10:00:00Z",
+            "updated_at": "2026-03-10T22:00:00Z",
+            "requester_id": 1001,
+            "assignee_id": 2002,
+            "tags": ["crash_detected"],
+            "custom_fields": {
+                "Status With": "support",
+                "Support Stage": "investigation",
+                "Release Stage": "production",
+            },
+        }
+        comments_payload = [
+            {
+                "author_id": 1001,
+                "public": True,
+                "body": (
+                    "Crash log from device:\\n"
+                    "2026-03-10 21:16:59 Fatal Exception: java.lang.IllegalStateException\\n"
+                    "at com.example.ScheduledTaskRunner.run(ScheduledTaskRunner.java:42)"
+                ),
+                "html_body": (
+                    "<p>Crash log from device:</p>"
+                    "<p>2026-03-10 21:16:59 Fatal Exception: java.lang.IllegalStateException</p>"
+                    "<p>at com.example.ScheduledTaskRunner.run(ScheduledTaskRunner.java:42)</p>"
+                ),
+                "created_at": "2026-03-10T21:20:00Z",
+                "attachments": [],
+            }
+        ]
+
+        request = CallToolRequest(
+            method="tools/call",
+            params=CallToolRequestParams(
+                name="scan_tickets_in_trouble",
+                arguments={"created_last_hours": 24, "per_page": 25},
+            ),
+        )
+
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        with (
+            patch.object(server_module, "zendesk_client") as mock_client,
+            patch.object(server_module, "_prepare_ticket_payload", return_value=full_ticket_payload),
+        ):
+            mock_client.get_tickets.return_value = list_payload
+            mock_client.get_ticket_comments.return_value = comments_payload
+
+            handler = server_module.mcp._mcp_server.request_handlers[CallToolRequest]
+            response = asyncio.run(handler(request))
+
+        structured = response.root.structuredContent
+        flag_codes = [flag["code"] for flag in structured["tickets"][0]["flags"]]
+        self.assertNotIn("meeting_summary_missing", flag_codes)
+        self.assertFalse(response.root.isError)
+
     def test_scan_tickets_in_trouble_does_not_flag_customer_comment_before_4h_deadline(self) -> None:
         list_payload = {
             "tickets": [

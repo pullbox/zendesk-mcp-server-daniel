@@ -525,19 +525,20 @@ CRASH_SIGNAL_TERMS = [
     "fatal exception",
     "segmentation fault",
 ]
-CALL_MENTION_TERMS = [
-    "call",
-    "phone call",
-    "zoom",
-    "meeting",
-    "meet",
-    "google meet",
-    "teams",
-    "schedule",
-    "scheduled",
-    "scheduling",
-    "reschedule",
-]
+CALL_PLATFORM_PATTERN = re.compile(
+    r"\b(phone call|call|zoom|meeting|google meet|meet|teams)\b",
+    re.IGNORECASE,
+)
+CALL_SCHEDULING_PATTERN = re.compile(
+    r"("
+    r"\b(?:schedule|scheduled|scheduling|reschedule|rescheduled|rescheduling)\b.{0,40}"
+    r"\b(?:call|phone call|meeting|google meet|meet|teams|zoom)\b"
+    r"|"
+    r"\b(?:call|phone call|meeting|google meet|meet|teams|zoom)\b.{0,40}"
+    r"\b(?:schedule|scheduled|scheduling|reschedule|rescheduled|rescheduling)\b"
+    r")",
+    re.IGNORECASE | re.DOTALL,
+)
 MEETING_SUMMARY_TERMS = [
     "meeting summary",
     "call summary",
@@ -690,6 +691,12 @@ def _comment_text(comment: dict[str, Any]) -> str:
             ],
         )
     )
+
+
+def _contains_call_mention(text: str | None) -> bool:
+    if not text:
+        return False
+    return bool(CALL_PLATFORM_PATTERN.search(text) or CALL_SCHEDULING_PATTERN.search(text))
 
 
 def _build_customer_unhappy_flag(
@@ -857,9 +864,8 @@ def _extract_recent_comment_notes(comments: list[dict[str, Any]], requester_id: 
         source = _comment_source(comment, requester_id)
         created_at = comment.get("created_at") or "Not found"
         text = _comment_text(comment)
-        lowered = text.lower()
 
-        if any(term in lowered for term in CALL_MENTION_TERMS):
+        if _contains_call_mention(text):
             notes.append(f"Recent comment mentions a call/scheduling ({source}, {created_at}).")
 
         for datetime_match in DATE_OR_TIME_PATTERN.finditer(text):
@@ -922,8 +928,9 @@ def _is_meeting_summary_comment(
     if assignee_id is not None and comment.get("author_id") != assignee_id:
         return False
 
-    lowered = _comment_text(comment).lower()
-    return any(term in lowered for term in CALL_MENTION_TERMS) and any(
+    text = _comment_text(comment)
+    lowered = text.lower()
+    return _contains_call_mention(text) and any(
         term in lowered for term in MEETING_SUMMARY_TERMS
     )
 
@@ -945,8 +952,7 @@ def _build_meeting_summary_flag(
 
     for comment in public_comments_sorted:
         text = _comment_text(comment)
-        lowered = text.lower()
-        if not any(term in lowered for term in CALL_MENTION_TERMS):
+        if not _contains_call_mention(text):
             continue
         if _is_meeting_summary_comment(comment, requester_id=requester_id, assignee_id=assignee_id):
             continue
