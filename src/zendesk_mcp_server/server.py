@@ -446,6 +446,12 @@ class CrashAttachmentSummary(BaseModel):
     signals: list[CrashAttachmentSignal] = Field(default_factory=list)
 
 
+class ProductionImpactAssessment(BaseModel):
+    is_production_issue: bool = False
+    evidence: list[str] = Field(default_factory=list)
+    non_production_signals: list[str] = Field(default_factory=list)
+
+
 class TicketTroubleAssessment(BaseModel):
     ticket_id: int
     ticket_url: str
@@ -459,6 +465,7 @@ class TicketTroubleAssessment(BaseModel):
     risk_score: int
     flags: list[TicketTroubleFlag]
     crash_attachment_summary: CrashAttachmentSummary | None = None
+    production_impact: ProductionImpactAssessment = Field(default_factory=ProductionImpactAssessment)
     recent_comment_notes: list[str] = Field(default_factory=list)
     tom: str = "☐"
     tom_tovar_commented: bool = False
@@ -491,6 +498,7 @@ TROUBLE_FLAG_WEIGHTS: dict[str, int] = {
     "late_initial_response": 20,
     "late_stacktrace_request": 44,
     "title_incorrect": 45,
+    "production_user_impact": 35,
 }
 SEVERITY_FALLBACK_WEIGHTS = {"high": 30, "medium": 15, "low": 5}
 SEVERITY_RANK = {"high": 3, "medium": 2, "low": 1}
@@ -553,6 +561,35 @@ VIDEO_ATTACHMENT_EXTENSIONS = (".mp4", ".mov", ".m4v", ".avi", ".webm", ".mkv")
 IMAGE_ATTACHMENT_EXTENSIONS = (".jpg", ".jpeg", ".png", ".heic", ".heif", ".gif", ".bmp", ".webp")
 TOM_TOVAR_USER_ID = 4293579406
 TOM_TOVAR_COMMENT_MARKER = "⚠️ Tom Tovar (id=4293579406) commented on this ticket."
+PRODUCTION_SIGNAL_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"\bprod(?:uction)?\b", re.IGNORECASE), "Mentions production environment."),
+    (
+        re.compile(r"\b(?:app\s*store|appstore|play\s*store|google play)\b", re.IGNORECASE),
+        "References a live store release.",
+    ),
+    (re.compile(r"\b(?:already\s+)?live\b", re.IGNORECASE), "Mentions the app is live."),
+    (re.compile(r"\bend[ -]?users?\b", re.IGNORECASE), "Mentions end-user impact."),
+    (
+        re.compile(r"\b(?:users?|customers?)\s+(?:are\s+)?(?:impacted|affected|blocked)\b", re.IGNORECASE),
+        "States that users/customers are impacted.",
+    ),
+    (
+        re.compile(r"\bimpact(?:ing|ed)?\s+(?:our\s+)?(?:users?|customers?)\b", re.IGNORECASE),
+        "States that users/customers are being impacted.",
+    ),
+)
+NON_PRODUCTION_SIGNAL_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"\buat\b", re.IGNORECASE), "Mentions UAT."),
+    (re.compile(r"\bdev(?:elopment|eng)?\b", re.IGNORECASE), "Mentions DEV/engineering environment."),
+    (re.compile(r"\bqa\b", re.IGNORECASE), "Mentions QA environment."),
+    (re.compile(r"\bstaging\b", re.IGNORECASE), "Mentions staging environment."),
+    (re.compile(r"\bsandbox\b", re.IGNORECASE), "Mentions sandbox environment."),
+    (re.compile(r"\btesting\b", re.IGNORECASE), "Mentions testing environment."),
+    (re.compile(r"\btestflight\b", re.IGNORECASE), "Mentions TestFlight."),
+    (re.compile(r"\bpre[- ]?release\b", re.IGNORECASE), "Mentions pre-release environment."),
+    (re.compile(r"\bnon[- ]?prod(?:uction)?\b", re.IGNORECASE), "Mentions non-production environment."),
+    (re.compile(r"\binternal build\b", re.IGNORECASE), "Mentions internal build."),
+)
 
 
 def _parse_iso_datetime(value: str | None) -> datetime | None:
@@ -571,10 +608,71 @@ def _contains_any(text: str | None, terms: list[str]) -> bool:
     return any(term in lowered for term in terms)
 
 
+def _append_unique(items: list[str], value: str | None) -> None:
+    if value and value not in items:
+        items.append(value)
+
+
 def _strip_html(text: str | None) -> str:
     if not text:
         return ""
     return re.sub(r"<[^>]+>", " ", text)
+
+
+def _collect_environment_signal_matches(
+    text: str | None,
+    patterns: tuple[tuple[re.Pattern[str], str], ...],
+    source: str,
+) -> list[str]:
+    if not text:
+        return []
+    matches: list[str] = []
+    for pattern, label in patterns:
+        if pattern.search(text):
+            matches.append(f"{label} ({source}).")
+    return matches
+
+
+def _build_production_impact_assessment(
+    ticket: dict[str, Any],
+    comments: list[dict[str, Any]],
+) -> ProductionImpactAssessment:
+    evidence: list[str] = []
+    non_production_signals: list[str] = []
+    custom_fields = ticket.get("custom_fields") if isinstance(ticket.get("custom_fields"), dict) else {}
+
+    release_stage = custom_fields.get("Release Stage")
+    support_class = custom_fields.get("Support Class")
+    subject = ticket.get("subject")
+    description = ticket.get("description")
+
+    for match in _collect_environment_signal_matches(str(release_stage or ""), PRODUCTION_SIGNAL_PATTERNS, "release stage"):
+        _append_unique(evidence, match)
+    for match in _collect_environment_signal_matches(str(release_stage or ""), NON_PRODUCTION_SIGNAL_PATTERNS, "release stage"):
+        _append_unique(non_production_signals, match)
+
+    for match in _collect_environment_signal_matches(str(support_class or ""), NON_PRODUCTION_SIGNAL_PATTERNS, "support class"):
+        _append_unique(non_production_signals, match)
+
+    for field_name, text in (("subject", subject), ("description", description)):
+        for match in _collect_environment_signal_matches(text, PRODUCTION_SIGNAL_PATTERNS, field_name):
+            _append_unique(evidence, match)
+        for match in _collect_environment_signal_matches(text, NON_PRODUCTION_SIGNAL_PATTERNS, field_name):
+            _append_unique(non_production_signals, match)
+
+    for index, comment in enumerate(comments, start=1):
+        text = " ".join(filter(None, [str(comment.get("body") or ""), _strip_html(comment.get("html_body"))]))
+        source = f"comment #{index}"
+        for match in _collect_environment_signal_matches(text, PRODUCTION_SIGNAL_PATTERNS, source):
+            _append_unique(evidence, match)
+        for match in _collect_environment_signal_matches(text, NON_PRODUCTION_SIGNAL_PATTERNS, source):
+            _append_unique(non_production_signals, match)
+
+    return ProductionImpactAssessment(
+        is_production_issue=bool(evidence),
+        evidence=evidence,
+        non_production_signals=non_production_signals,
+    )
 
 
 def _build_tom_tovar_comment_metadata(comments: list[dict[str, Any]]) -> dict[str, Any]:
@@ -876,6 +974,7 @@ def _build_ticket_trouble_assessment(
     custom_fields = ticket.get("custom_fields") if isinstance(ticket.get("custom_fields"), dict) else {}
     is_escalated = _is_escalated_ticket(ticket)
     status_with = str(custom_fields.get("Status With") or "").strip().lower()
+    production_impact = _build_production_impact_assessment(ticket=ticket, comments=comments)
 
     public_comments = [c for c in comments if c.get("public")]
     crash_attachment_summary = _build_crash_attachment_summary(comments=comments, requester_id=requester_id)
@@ -924,6 +1023,19 @@ def _build_ticket_trouble_assessment(
                 code="title_incorrect",
                 severity="medium",
                 message="Ticket title is missing expected structured segments (Customer | Context | Issue).",
+            )
+        )
+
+    if production_impact.is_production_issue:
+        evidence_preview = "; ".join(production_impact.evidence[:3])
+        flags.append(
+            TicketTroubleFlag(
+                code="production_user_impact",
+                severity="high",
+                message=(
+                    "Ticket indicates a live production issue affecting real users/customers; "
+                    f"prioritize above UAT/DEV/testing issues. Evidence: {evidence_preview}"
+                ),
             )
         )
 
@@ -1175,6 +1287,7 @@ def _build_ticket_trouble_assessment(
         risk_score=risk_score,
         flags=sorted_flags,
         crash_attachment_summary=crash_attachment_summary,
+        production_impact=production_impact,
         recent_comment_notes=recent_comment_notes,
         tom="☑" if tom_tovar_comment_metadata["tom_tovar_commented"] else "☐",
         tom_tovar_commented=tom_tovar_comment_metadata["tom_tovar_commented"],
@@ -1328,6 +1441,7 @@ def get_ticket_summary(
         "## Trouble Scan",
         f"Reviewed Ticket ID: {resolved_ticket_id}",
         f"Escalated: {'Yes' if assessment.is_escalated else 'No'}",
+        f"Production Issue: {'Yes' if assessment.production_impact.is_production_issue else 'No'}",
         f"Priority Interpretation: {assessment.priority_interpretation}",
         f"In Trouble: {'Yes' if assessment.in_trouble else 'No'}",
         f"Risk Score: {assessment.risk_score}",
@@ -1359,6 +1473,13 @@ def get_ticket_summary(
         alert_lines.append(f"Stacktrace attachments: {stacktrace_files}")
         alert_lines.append(f"Replication path video: {replication_videos}")
         alert_lines.append(f"Other crash-related attachments: {other_related}")
+    if assessment.production_impact.is_production_issue:
+        alert_lines.append(f"Production Evidence: {'; '.join(assessment.production_impact.evidence)}")
+    elif assessment.production_impact.non_production_signals:
+        alert_lines.append(
+            "Environment Signals: "
+            f"non-production only ({'; '.join(assessment.production_impact.non_production_signals)})"
+        )
     if assessment.flags:
         alert_lines.append("Flags:")
         for flag in assessment.flags:
@@ -1387,6 +1508,7 @@ def review_ticket(
     if resolved_ticket_id != ticket_id:
         ticket["merged_from_ticket_id"] = ticket_id
     ticket.update(_build_tom_tovar_comment_metadata(comments))
+    ticket["production_impact"] = _build_production_impact_assessment(ticket=ticket, comments=comments).model_dump()
     attachment_summary = _build_crash_attachment_summary(comments=comments, requester_id=ticket.get("requester_id"))
     return build_ticket_analysis_input(
         ticket_id=resolved_ticket_id,

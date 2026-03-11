@@ -1535,6 +1535,93 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
         self.assertNotIn("missing_initial_response", flag_codes)
         self.assertNotIn("late_initial_response", flag_codes)
 
+    def test_ticket_with_live_appstore_end_user_impact_is_flagged_as_production_issue(self) -> None:
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        ticket = {
+            "id": 9900,
+            "subject": "ACME | iOS | App Store app crashes at login",
+            "description": "The app is already live and end users are impacted in production.",
+            "status": "open",
+            "priority": "normal",
+            "created_at": "2026-03-05T10:00:00Z",
+            "updated_at": "2026-03-05T10:20:00Z",
+            "requester_id": 1001,
+            "tags": [],
+            "custom_fields": {
+                "Status With": "support",
+                "Support Stage": "investigation",
+                "Release Stage": "Production",
+            },
+        }
+        comments = [
+            {
+                "author_id": 1001,
+                "public": True,
+                "body": "This is live on the App Store and impacting customers now.",
+                "html_body": "<p>This is live on the App Store and impacting customers now.</p>",
+                "created_at": "2026-03-05T10:05:00Z",
+                "attachments": [],
+            }
+        ]
+
+        assessment = server_module._build_ticket_trouble_assessment(
+            ticket=ticket,
+            comments=comments,
+            initial_response_sla_minutes=60,
+            high_priority_stale_hours=8,
+        )
+
+        flag_codes = [flag.code for flag in assessment.flags]
+        self.assertIn("production_user_impact", flag_codes)
+        self.assertTrue(assessment.production_impact.is_production_issue)
+        self.assertGreaterEqual(assessment.risk_score, 35)
+        self.assertTrue(any("live store release" in evidence.lower() for evidence in assessment.production_impact.evidence))
+
+    def test_ticket_with_uat_only_signals_is_not_flagged_as_production_issue(self) -> None:
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        ticket = {
+            "id": 9900,
+            "subject": "ACME | iOS | UAT login issue",
+            "description": "Issue reproduced only in UAT during testing.",
+            "status": "open",
+            "priority": "normal",
+            "created_at": "2026-03-05T10:00:00Z",
+            "updated_at": "2026-03-05T10:20:00Z",
+            "requester_id": 1001,
+            "tags": [],
+            "custom_fields": {
+                "Status With": "support",
+                "Support Stage": "investigation",
+                "Release Stage": "Testing / Pre-Release UAT",
+            },
+        }
+        comments = [
+            {
+                "author_id": 1001,
+                "public": True,
+                "body": "Only seen in TestFlight and QA so far.",
+                "html_body": "<p>Only seen in TestFlight and QA so far.</p>",
+                "created_at": "2026-03-05T10:05:00Z",
+                "attachments": [],
+            }
+        ]
+
+        assessment = server_module._build_ticket_trouble_assessment(
+            ticket=ticket,
+            comments=comments,
+            initial_response_sla_minutes=60,
+            high_priority_stale_hours=8,
+        )
+
+        flag_codes = [flag.code for flag in assessment.flags]
+        self.assertNotIn("production_user_impact", flag_codes)
+        self.assertFalse(assessment.production_impact.is_production_issue)
+        self.assertTrue(assessment.production_impact.non_production_signals)
+
     def test_crash_ticket_attachment_filename_keyword_counts_as_stacktrace_evidence(self) -> None:
         with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
             server_module = importlib.import_module("zendesk_mcp_server.server")
@@ -1861,6 +1948,61 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
         self.assertIn("support_owned_no_recent_updates", summary_text)
         self.assertFalse(response.root.isError)
 
+    def test_get_ticket_summary_includes_production_issue_signal(self) -> None:
+        request = CallToolRequest(
+            method="tools/call",
+            params=CallToolRequestParams(
+                name="get_ticket_summary",
+                arguments={"ticket_id": 9912},
+            ),
+        )
+
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        ticket_payload = {
+            "id": 9912,
+            "subject": "ACME | Android | Play Store users blocked at enrollment",
+            "description": "Production users are affected.",
+            "status": "open",
+            "priority": "normal",
+            "created_at": "2026-03-05T10:00:00Z",
+            "updated_at": "2026-03-05T10:10:00Z",
+            "requester_id": 1001,
+            "tags": [],
+            "custom_fields": {
+                "Status With": "support",
+                "Support Stage": "investigation",
+                "Release Stage": "Production",
+            },
+            "ticket_url": "https://appdomesupport.zendesk.com/agent/tickets/9912",
+            "ticket_link": "[9912](https://appdomesupport.zendesk.com/agent/tickets/9912)",
+        }
+        comments_payload = [
+            {
+                "author_id": 1001,
+                "public": True,
+                "body": "This is live in Google Play and end users are impacted.",
+                "html_body": "<p>This is live in Google Play and end users are impacted.</p>",
+                "created_at": "2026-03-05T10:05:00Z",
+                "attachments": [],
+            }
+        ]
+
+        with (
+            patch.object(server_module, "_prepare_ticket_payload", return_value=ticket_payload),
+            patch.object(server_module, "zendesk_client") as mock_client,
+        ):
+            mock_client.get_ticket_comments.return_value = comments_payload
+            handler = server_module.mcp._mcp_server.request_handlers[CallToolRequest]
+            response = asyncio.run(handler(request))
+
+        summary_text = response.root.content[0].text
+        self.assertIn("Production Issue: Yes", summary_text)
+        self.assertIn("Production Evidence:", summary_text)
+        self.assertIn("production_user_impact", summary_text)
+        self.assertFalse(response.root.isError)
+
     def test_review_ticket_resolves_merged_reference_from_last_comment(self) -> None:
         request = CallToolRequest(
             method="tools/call",
@@ -1942,7 +2084,12 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
         payload = json.loads(response.root.content[0].text.split("Use the following evidence only.\n\n", 1)[1])
         self.assertEqual(payload["ticket_id"], 123456)
         self.assertEqual(payload["ticket"]["id"], 123456)
-        self.assertEqual(payload["comments"], referenced_comments_payload)
+        self.assertIn("production_impact", payload["ticket"])
+        self.assertFalse(payload["ticket"]["production_impact"]["is_production_issue"])
+        self.assertEqual(len(payload["comments"]), 1)
+        self.assertEqual(payload["comments"][0]["author_id"], 2002)
+        self.assertEqual(payload["comments"][0]["body"], "Continuing investigation on the merged ticket.")
+        self.assertTrue(payload["comments"][0]["public"])
         self.assertEqual(mock_prepare_ticket_payload.call_count, 2)
         self.assertFalse(response.root.isError)
 
