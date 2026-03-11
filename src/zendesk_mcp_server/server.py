@@ -496,6 +496,7 @@ TROUBLE_FLAG_WEIGHTS: dict[str, int] = {
     "missing_initial_response": 34,
     "crash_process_gap": 45,
     "crash_tag_missing": 50,
+    "customer_unhappy": 40,
     "meeting_summary_missing": 28,
     "status_fields_incomplete": 24,
     "customer_comment_no_response": 30,
@@ -614,6 +615,17 @@ NON_PRODUCTION_SIGNAL_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\bnon[- ]?prod(?:uction)?\b", re.IGNORECASE), "Mentions non-production environment."),
     (re.compile(r"\binternal build\b", re.IGNORECASE), "Mentions internal build."),
 )
+UNHAPPY_COMMENT_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\bnot\s+happy\b", re.IGNORECASE),
+    re.compile(r"\bunhappy\b", re.IGNORECASE),
+    re.compile(r"\bfrustrat(?:ed|ing|ion)?\b", re.IGNORECASE),
+    re.compile(r"\bupset\b", re.IGNORECASE),
+    re.compile(r"\bangry\b", re.IGNORECASE),
+    re.compile(r"\bdissatisfied\b", re.IGNORECASE),
+    re.compile(r"\bdisappointed\b", re.IGNORECASE),
+    re.compile(r"\bannoy(?:ed|ing)?\b", re.IGNORECASE),
+    re.compile(r"\bunacceptable\b", re.IGNORECASE),
+)
 
 
 def _parse_iso_datetime(value: str | None) -> datetime | None:
@@ -653,6 +665,35 @@ def _comment_text(comment: dict[str, Any]) -> str:
             ],
         )
     )
+
+
+def _build_customer_unhappy_flag(
+    comments: list[dict[str, Any]],
+    requester_id: int | None,
+) -> TicketTroubleFlag | None:
+    for comment in sorted(
+        comments,
+        key=lambda c: _parse_iso_datetime(c.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc),
+        reverse=True,
+    ):
+        text = _comment_text(comment)
+        if not text:
+            continue
+        for pattern in UNHAPPY_COMMENT_PATTERNS:
+            match = pattern.search(text)
+            if not match:
+                continue
+            source = _comment_source(comment, requester_id)
+            created_at = comment.get("created_at") or "unknown time"
+            return TicketTroubleFlag(
+                code="customer_unhappy",
+                severity="high",
+                message=(
+                    "Comment suggests customer dissatisfaction; treat this as a high-priority item. "
+                    f"Evidence: '{match.group(0)}' in {source} at {created_at}."
+                ),
+            )
+    return None
 
 
 def _collect_environment_signal_matches(
@@ -1191,6 +1232,10 @@ def _build_ticket_trouble_assessment(
                 ),
             )
         )
+
+    unhappy_comment_flag = _build_customer_unhappy_flag(comments=comments, requester_id=requester_id)
+    if unhappy_comment_flag is not None:
+        flags.append(unhappy_comment_flag)
 
     required_status_fields = ["Status With", "Support Stage", "Release Stage"]
     missing_status_fields = [field for field in required_status_fields if not custom_fields.get(field)]

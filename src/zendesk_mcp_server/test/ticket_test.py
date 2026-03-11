@@ -1793,6 +1793,88 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
         self.assertGreaterEqual(assessment.risk_score, 35)
         self.assertTrue(any("live store release" in evidence.lower() for evidence in assessment.production_impact.evidence))
 
+    def test_internal_comment_indicating_customer_unhappy_is_flagged_high_priority(self) -> None:
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        ticket = {
+            "id": 9909,
+            "subject": "ACME | iOS | Login issue",
+            "status": "open",
+            "priority": "normal",
+            "created_at": "2026-03-05T10:00:00Z",
+            "updated_at": "2026-03-05T10:20:00Z",
+            "requester_id": 1001,
+            "tags": [],
+            "custom_fields": {
+                "Status With": "support",
+                "Support Stage": "investigation",
+                "Release Stage": "n/a",
+            },
+        }
+        comments = [
+            {
+                "author_id": 2002,
+                "public": False,
+                "body": "Customer is very frustrated and not happy with the delays.",
+                "html_body": "<p>Customer is very frustrated and not happy with the delays.</p>",
+                "created_at": "2026-03-05T10:10:00Z",
+                "attachments": [],
+            }
+        ]
+
+        assessment = server_module._build_ticket_trouble_assessment(
+            ticket=ticket,
+            comments=comments,
+            initial_response_sla_minutes=60,
+            high_priority_stale_hours=8,
+        )
+
+        flag_codes = [flag.code for flag in assessment.flags]
+        self.assertIn("customer_unhappy", flag_codes)
+        self.assertTrue(any("high-priority item" in flag.message for flag in assessment.flags))
+
+    def test_customer_public_comment_indicating_unhappiness_is_flagged_high_priority(self) -> None:
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        ticket = {
+            "id": 9910,
+            "subject": "ACME | Android | SDK issue",
+            "status": "open",
+            "priority": "normal",
+            "created_at": "2026-03-05T10:00:00Z",
+            "updated_at": "2026-03-05T10:20:00Z",
+            "requester_id": 1001,
+            "tags": [],
+            "custom_fields": {
+                "Status With": "support",
+                "Support Stage": "investigation",
+                "Release Stage": "n/a",
+            },
+        }
+        comments = [
+            {
+                "author_id": 1001,
+                "public": True,
+                "body": "We are very disappointed. This delay is unacceptable.",
+                "html_body": "<p>We are very disappointed. This delay is unacceptable.</p>",
+                "created_at": "2026-03-05T10:10:00Z",
+                "attachments": [],
+            }
+        ]
+
+        assessment = server_module._build_ticket_trouble_assessment(
+            ticket=ticket,
+            comments=comments,
+            initial_response_sla_minutes=60,
+            high_priority_stale_hours=8,
+        )
+
+        flag_codes = [flag.code for flag in assessment.flags]
+        self.assertIn("customer_unhappy", flag_codes)
+        self.assertTrue(any("customer_public_comment" in flag.message for flag in assessment.flags))
+
     def test_ticket_with_uat_only_signals_is_not_flagged_as_production_issue(self) -> None:
         with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
             server_module = importlib.import_module("zendesk_mcp_server.server")
