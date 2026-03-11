@@ -39,6 +39,17 @@ ZENDESK_TICKET_LINK_BASE_URL = os.getenv(
 )
 EST_TIMEZONE = timezone(timedelta(hours=-5), name="EST")
 
+ATTRIBUTION_GUARDRAILS = """
+Attribution guardrails:
+- Do not infer ownership, handoff, authorship, approval, escalation leadership, or decision-making unless the record explicitly states it.
+- Do not treat a person's presence in comments, internal notes, meetings, customer calls, CC fields, or nearby text as evidence that they owned or drove the work.
+- Describe observed actions literally and do not upgrade participation into ownership or responsibility.
+- Ticket assignment alone does not prove who handled escalation work, and participation alone does not prove ownership transfer.
+- State that ownership was transferred or handed off only when the record explicitly documents the transfer.
+- If the record is incomplete or mixed, say "the record does not explicitly show" or "not explicitly documented" instead of filling the gap.
+- Prefer omission over unsupported attribution.
+""".strip()
+
 
 TITLE_REVIEW_POLICY_TEMPLATE = """
 You are reviewing Zendesk ticket titles for naming-policy compliance.
@@ -71,6 +82,9 @@ Validation rules:
 - An escalated Ticket (the Escalation Status field is populated) can only marked as solved when the customer confirmed that the provided solution worked.
 - If the ticket is waiting for a customer response, the "Status With" field must be set to "Customer"; otherwise mark the review as invalid and explain the mismatch.
 
+General evidence rule:
+{attribution_guardrails}
+
 When reviewing a title, return one line each and exactly:
 Validation: VALID or INVALID
 Reason: <brief explanation>
@@ -100,6 +114,7 @@ Review goals:
 1. Identify whether the support handling appears compliant with internal processes based only on available evidence.
 2. Highlight any gaps, delays, missing confirmations, or unclear ownership transitions.
 3. Summarize what happened in a way that is useful for coaching and follow-up.
+4. Attribute actions, ownership, and escalation leadership only when explicitly supported by the ticket record.
 
 Required output:
 1. Issue Summary
@@ -147,6 +162,8 @@ Rules:
 - Escalated Tickets are tickets where the Escalation Status field is populated.
 - Do not use external assumptions or general policy knowledge unless explicitly present in the ticket.
 - Do not treat missing evidence as completed work.
+- Follow the attribution guardrails exactly:
+  {attribution_guardrails}
 - Email chain and preamble scope: when a ticket originates from an email chain, use only support interaction evidence (agent public comments, customer replies in-ticket, and internal notes) to evaluate agent behavior.
 - Do not use email chain preambles, introductory forwarding text, or prior forwarded email history to justify agent handling decisions.
 - Customer context statements in the opening message (for example, "I am writing on behalf of X who is on leave") explain ticket origin only and must not be used to justify or excuse agent delay/timeliness.
@@ -168,6 +185,7 @@ Rules:
 - For crash_detected/anr_yes tickets, if there is no stacktrace evidence and no explicit stacktrace/crash-log request, the Compliance Score must be 0.
 - For crash_detected/anr_yes tickets, if the first stacktrace/crash-log request is more than 1 hour after crash identification, the Compliance Score must be 0.
 - For crash_detected/anr_yes tickets, escalation must be timely: if first escalation occurs more than 1 hour after crash identification (or cannot be verified due to missing timestamp), the Compliance Score must be 0.
+- Before producing the final review, verify that every named person's role or responsibility is directly supported by ticket evidence; remove or soften any claim that depends on inference.
 - Prefer concise, evidence-based statements.
 """
 
@@ -180,6 +198,9 @@ Please fetch the ticket info, comments and knowledge base to draft a professiona
 3. Provides clear next steps or ask for specific details need to proceed
 4. Maintains a friendly and professional tone
 5. Ask for confirmation before commenting on the ticket
+
+Apply these evidence and attribution guardrails:
+{attribution_guardrails}
 
 The response should be formatted well and ready to be posted as a comment.
 """
@@ -1577,7 +1598,11 @@ def _build_ticket_trouble_markdown_list(tickets: list[TicketTroubleAssessment]) 
 def analyze_ticket_prompt(
     ticket_id: Annotated[int, Field(description="The ID of the ticket to analyze")],
 ) -> str:
-    return TICKET_ANALYSIS_TEMPLATE.format(ticket_id=ticket_id, ticket_link=_ticket_link(ticket_id)).strip()
+    return TICKET_ANALYSIS_TEMPLATE.format(
+        ticket_id=ticket_id,
+        ticket_link=_ticket_link(ticket_id),
+        attribution_guardrails=ATTRIBUTION_GUARDRAILS,
+    ).strip()
 
 
 @mcp.prompt(
@@ -1590,7 +1615,7 @@ def analyze_ticket_prompt(
     description="Define the policy for reviewing Zendesk ticket title structure",
 )
 def ticket_title_review_policy_prompt() -> str:
-    return TITLE_REVIEW_POLICY_TEMPLATE.strip()
+    return TITLE_REVIEW_POLICY_TEMPLATE.format(attribution_guardrails=ATTRIBUTION_GUARDRAILS).strip()
 
 @mcp.prompt(
     name="review-ticket-title",
@@ -1600,7 +1625,7 @@ def review_ticket_title_prompt(
     ticket_id: Annotated[int, Field(description="The Zendesk ticket ID to review")],
 ) -> str:
     return (
-        TITLE_REVIEW_POLICY_TEMPLATE.strip()
+        TITLE_REVIEW_POLICY_TEMPLATE.format(attribution_guardrails=ATTRIBUTION_GUARDRAILS).strip()
         + "\n\n"
         + REVIEW_SINGLE_TICKET_TEMPLATE.format(ticket_id=ticket_id, ticket_link=_ticket_link(ticket_id)).strip()
     )
@@ -1609,7 +1634,11 @@ def review_ticket_title_prompt(
 def draft_ticket_response_prompt(
     ticket_id: Annotated[int, Field(description="The ID of the ticket to respond to")],
 ) -> str:
-    return COMMENT_DRAFT_TEMPLATE.format(ticket_id=ticket_id, ticket_link=_ticket_link(ticket_id)).strip()
+    return COMMENT_DRAFT_TEMPLATE.format(
+        ticket_id=ticket_id,
+        ticket_link=_ticket_link(ticket_id),
+        attribution_guardrails=ATTRIBUTION_GUARDRAILS,
+    ).strip()
 
 
 @mcp.tool(name="get_ticket", description="Retrieve a Zendesk ticket by its ID")

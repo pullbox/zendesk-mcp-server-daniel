@@ -9,6 +9,16 @@ TIMESTAMP_FIELD_NAMES = {
     "updated",
     "timestamp",
 }
+ATTRIBUTION_GUARDRAILS = """
+Attribution guardrails:
+- Do not infer ownership, handoff, authorship, approval, escalation leadership, or decision-making unless the record explicitly states it.
+- Do not treat a person's presence in comments, internal notes, meetings, customer calls, CC fields, or nearby text as evidence that they owned or drove the work.
+- Describe observed actions literally and do not upgrade participation into ownership or responsibility.
+- Ticket assignment alone does not prove who handled escalation work, and participation alone does not prove ownership transfer.
+- State that ownership was transferred or handed off only when the record explicitly documents the transfer.
+- If the record is incomplete or mixed, say "the record does not explicitly show" or "not explicitly documented" instead of filling the gap.
+- Prefer omission over unsupported attribution.
+""".strip()
 
 
 def _format_est_timestamp(value: Any) -> Any:
@@ -68,6 +78,7 @@ def build_ticket_analysis_input(
 
     return (
         "Follow this QA analysis rubric exactly.\n\n"
+        f"{ATTRIBUTION_GUARDRAILS}\n\n"
         f"{rubric.strip()}\n\n"
         "Use the following evidence only.\n\n"
         f"{json.dumps(payload, indent=2)}"
@@ -122,5 +133,6 @@ def build_batch_ticket_review_input(
         "Review each sampled ticket independently.\n"
         "For each ticket, follow its rubric exactly and use only the provided evidence.\n"
         "Keep the reviews separate and clearly labeled by ticket id.\n\n"
+        f"{ATTRIBUTION_GUARDRAILS}\n\n"
         f"{json.dumps({'reviews': batches}, indent=2)}"
     )
