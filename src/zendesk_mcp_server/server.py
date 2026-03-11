@@ -496,6 +496,7 @@ TROUBLE_FLAG_WEIGHTS: dict[str, int] = {
     "missing_initial_response": 34,
     "crash_process_gap": 45,
     "crash_tag_missing": 50,
+    "meeting_summary_missing": 28,
     "status_fields_incomplete": 24,
     "customer_comment_no_response": 30,
     "solved_without_customer_confirmation": 10,
@@ -536,6 +537,18 @@ CALL_MENTION_TERMS = [
     "scheduling",
     "reschedule",
 ]
+MEETING_SUMMARY_TERMS = [
+    "meeting summary",
+    "call summary",
+    "meeting notes",
+    "call notes",
+    "recap",
+    "summary",
+    "on the call",
+    "during the call",
+    "next steps",
+    "action items",
+]
 DATE_OR_TIME_PATTERN = re.compile(
     r"\b("
     r"\d{4}-\d{2}-\d{2}"
@@ -548,6 +561,11 @@ DATE_OR_TIME_PATTERN = re.compile(
     r"|"
     r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)(?:[a-z]*)\s+\d{1,2}(?:,\s*\d{4})?"
     r")\b",
+    re.IGNORECASE,
+)
+MEETING_DATETIME_PATTERN = re.compile(
+    r"\b(?P<date>\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}(?:/\d{2,4})?)"
+    r"(?:\D{0,12}(?P<time>\d{1,2}:\d{2})(?:\s*(?P<ampm>am|pm))?)?\b",
     re.IGNORECASE,
 )
 CRASH_ATTACHMENT_KEYWORDS = (
@@ -623,6 +641,18 @@ def _strip_html(text: str | None) -> str:
     if not text:
         return ""
     return re.sub(r"<[^>]+>", " ", text)
+
+
+def _comment_text(comment: dict[str, Any]) -> str:
+    return " ".join(
+        filter(
+            None,
+            [
+                str(comment.get("body") or ""),
+                _strip_html(comment.get("html_body")),
+            ],
+        )
+    )
 
 
 def _collect_environment_signal_matches(
@@ -736,27 +766,143 @@ def _extract_recent_comment_notes(comments: list[dict[str, Any]], requester_id: 
     for comment in recent_comments:
         source = _comment_source(comment, requester_id)
         created_at = comment.get("created_at") or "Not found"
-        text = " ".join(
-            filter(
-                None,
-                [
-                    str(comment.get("body") or ""),
-                    _strip_html(comment.get("html_body")),
-                ],
-            )
-        )
+        text = _comment_text(comment)
         lowered = text.lower()
 
         if any(term in lowered for term in CALL_MENTION_TERMS):
             notes.append(f"Recent comment mentions a call/scheduling ({source}, {created_at}).")
 
-        datetime_match = DATE_OR_TIME_PATTERN.search(text)
-        if datetime_match:
+        for datetime_match in DATE_OR_TIME_PATTERN.finditer(text):
             notes.append(
                 "Recent comment mentions date/time "
                 f'"{datetime_match.group(0)}" ({source}, {created_at}).'
             )
     return notes
+
+
+def _extract_meeting_scheduled_at(text: str, fallback_year: int | None = None) -> datetime | None:
+    match = MEETING_DATETIME_PATTERN.search(text)
+    if not match:
+        return None
+
+    date_part = match.group("date")
+    time_part = match.group("time")
+    ampm = match.group("ampm")
+
+    try:
+        if "-" in date_part:
+            parsed_date = datetime.strptime(date_part, "%Y-%m-%d")
+        else:
+            month, day, *year_parts = date_part.split("/")
+            year = int(year_parts[0]) if year_parts else (fallback_year or datetime.now(timezone.utc).year)
+            if year < 100:
+                year += 2000
+            parsed_date = datetime(year, int(month), int(day))
+    except ValueError:
+        return None
+
+    hour = 0
+    minute = 0
+    if time_part:
+        try:
+            hour, minute = [int(part) for part in time_part.split(":", 1)]
+        except ValueError:
+            return None
+        if ampm:
+            ampm_lower = ampm.lower()
+            if ampm_lower == "pm" and hour != 12:
+                hour += 12
+            elif ampm_lower == "am" and hour == 12:
+                hour = 0
+
+    return parsed_date.replace(hour=hour, minute=minute, tzinfo=timezone.utc)
+
+
+def _is_public_agent_comment(comment: dict[str, Any], requester_id: int | None) -> bool:
+    return bool(comment.get("public")) and not (requester_id is not None and comment.get("author_id") == requester_id)
+
+
+def _is_meeting_summary_comment(
+    comment: dict[str, Any],
+    requester_id: int | None,
+    assignee_id: int | None,
+) -> bool:
+    if not _is_public_agent_comment(comment, requester_id):
+        return False
+    if assignee_id is not None and comment.get("author_id") != assignee_id:
+        return False
+
+    lowered = _comment_text(comment).lower()
+    return any(term in lowered for term in CALL_MENTION_TERMS) and any(
+        term in lowered for term in MEETING_SUMMARY_TERMS
+    )
+
+
+def _build_meeting_summary_flag(
+    comments: list[dict[str, Any]],
+    requester_id: int | None,
+    assignee_id: int | None,
+    updated_at: datetime | None,
+) -> TicketTroubleFlag | None:
+    public_comments_sorted = sorted(
+        [comment for comment in comments if comment.get("public")],
+        key=lambda c: _parse_iso_datetime(c.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc),
+    )
+    if not public_comments_sorted:
+        return None
+
+    reference_time = updated_at or datetime.now(timezone.utc)
+
+    for comment in public_comments_sorted:
+        text = _comment_text(comment)
+        lowered = text.lower()
+        if not any(term in lowered for term in CALL_MENTION_TERMS):
+            continue
+        if _is_meeting_summary_comment(comment, requester_id=requester_id, assignee_id=assignee_id):
+            continue
+
+        comment_time = _parse_iso_datetime(comment.get("created_at"))
+        scheduled_at = _extract_meeting_scheduled_at(text, fallback_year=comment_time.year if comment_time else None)
+        if scheduled_at is not None and scheduled_at > reference_time:
+            continue
+
+        later_public_comments = [
+            candidate
+            for candidate in public_comments_sorted
+            if (
+                (_parse_iso_datetime(candidate.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc))
+                > (comment_time or datetime.min.replace(tzinfo=timezone.utc))
+            )
+        ]
+        if not scheduled_at and not later_public_comments:
+            continue
+
+        if any(
+            _is_meeting_summary_comment(
+                candidate,
+                requester_id=requester_id,
+                assignee_id=assignee_id,
+            )
+            for candidate in later_public_comments
+        ):
+            continue
+
+        meeting_reference = (
+            f"scheduled for {scheduled_at.strftime('%Y-%m-%d %H:%M UTC')}"
+            if scheduled_at is not None
+            else f"mentioned at {comment.get('created_at') or 'an unknown time'}"
+        )
+        owner_label = "assigned SDE" if assignee_id is not None else "agent"
+        return TicketTroubleFlag(
+            code="meeting_summary_missing",
+            severity="medium",
+            message=(
+                f"Meeting/call was requested or scheduled ({meeting_reference}), but no later public "
+                f"meeting summary notes from the {owner_label} were found."
+            ),
+        )
+
+    return None
 
 
 def _extract_merged_ticket_id_from_comment(comment: dict[str, Any]) -> int | None:
@@ -974,6 +1120,7 @@ def _build_ticket_trouble_assessment(
     status = ticket.get("status")
     priority = ticket.get("priority")
     requester_id = ticket.get("requester_id")
+    assignee_id = ticket.get("assignee_id")
     tags = set(ticket.get("tags") or [])
     created_at = _parse_iso_datetime(ticket.get("created_at"))
     updated_at = _parse_iso_datetime(ticket.get("updated_at"))
@@ -1256,6 +1403,15 @@ def _build_ticket_trouble_assessment(
                         message=f"Stacktrace request was sent after {request_delay_minutes}m (>60m).",
                     )
                 )
+
+    meeting_summary_flag = _build_meeting_summary_flag(
+        comments=comments,
+        requester_id=requester_id,
+        assignee_id=assignee_id,
+        updated_at=updated_at,
+    )
+    if meeting_summary_flag is not None:
+        flags.append(meeting_summary_flag)
 
     recent_comment_notes = _extract_recent_comment_notes(comments=comments, requester_id=requester_id)
 

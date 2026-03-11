@@ -220,8 +220,9 @@ Scan non-solved tickets created in the last N hours and flag likely QA/process i
   - production-user-impact detection
   - crash-ticket process gaps and missing crash tags
   - required status/custom-field completeness
-  - late or missing initial public response
-  - customer public comment without timely follow-up
+- late or missing initial public response
+- scheduled/requested meetings without later public SDE call-summary notes
+- customer public comment without timely follow-up
   - solved/closed tickets without explicit customer confirmation
   - stale high-priority escalations and stale support-owned tickets
 
@@ -231,6 +232,7 @@ Current flag conditions include:
 - `status_fields_incomplete`: one or more of `Status With`, `Support Stage`, or `Release Stage` is missing.
 - `missing_initial_response`: no public agent reply after the configured first-response SLA, unless the first comment was internal.
 - `late_initial_response`: first public agent reply exceeded the configured first-response SLA.
+- `meeting_summary_missing`: a meeting/call was requested or scheduled, but no later public summary notes from the assigned SDE/agent were found after the meeting should have occurred.
 - `customer_comment_no_response`: a customer public comment did not receive a public agent follow-up within the configured SLA; also used when a ticket stays open for days after a customer says no response is needed.
 - `solved_without_customer_confirmation`: ticket is solved/closed without explicit customer confirmation in public comments.
 - `high_priority_no_recent_updates`: escalated `high`/`urgent` ticket has been stale longer than the configured threshold.
