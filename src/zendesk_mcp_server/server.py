@@ -615,6 +615,31 @@ NON_PRODUCTION_SIGNAL_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\bnon[- ]?prod(?:uction)?\b", re.IGNORECASE), "Mentions non-production environment."),
     (re.compile(r"\binternal build\b", re.IGNORECASE), "Mentions internal build."),
 )
+ISSUE_SIGNAL_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\bissue\b", re.IGNORECASE),
+    re.compile(r"\bproblem\b", re.IGNORECASE),
+    re.compile(r"\berror\b", re.IGNORECASE),
+    re.compile(r"\bbug\b", re.IGNORECASE),
+    re.compile(r"\bcrash(?:ed|ing)?\b", re.IGNORECASE),
+    re.compile(r"\banr\b", re.IGNORECASE),
+    re.compile(r"\bfail(?:ed|ing|ure)?\b", re.IGNORECASE),
+    re.compile(r"\bnot\s+work(?:ing)?\b", re.IGNORECASE),
+    re.compile(r"\bdoes(?:\s+not|\s*n't)\s+work\b", re.IGNORECASE),
+    re.compile(r"\bunable\b", re.IGNORECASE),
+    re.compile(r"\bcannot\b", re.IGNORECASE),
+    re.compile(r"\bcan't\b", re.IGNORECASE),
+    re.compile(r"\bblocked\b", re.IGNORECASE),
+)
+TRAINING_REQUEST_SIGNAL_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\btraining\b", re.IGNORECASE),
+    re.compile(r"\bsession\b", re.IGNORECASE),
+    re.compile(r"\bwalkthrough\b", re.IGNORECASE),
+    re.compile(r"\bdemo\b", re.IGNORECASE),
+    re.compile(r"\blearn\b", re.IGNORECASE),
+    re.compile(r"\bunderstand\b", re.IGNORECASE),
+    re.compile(r"\breview\b", re.IGNORECASE),
+    re.compile(r"\btelemetry\b", re.IGNORECASE),
+)
 UNHAPPY_COMMENT_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bnot\s+happy\b", re.IGNORECASE),
     re.compile(r"\bunhappy\b", re.IGNORECASE),
@@ -710,12 +735,20 @@ def _collect_environment_signal_matches(
     return matches
 
 
+def _contains_pattern_match(text: str | None, patterns: tuple[re.Pattern[str], ...]) -> bool:
+    if not text:
+        return False
+    return any(pattern.search(text) for pattern in patterns)
+
+
 def _build_production_impact_assessment(
     ticket: dict[str, Any],
     comments: list[dict[str, Any]],
 ) -> ProductionImpactAssessment:
     evidence: list[str] = []
     non_production_signals: list[str] = []
+    has_issue_signal = False
+    has_training_request_signal = False
     custom_fields = ticket.get("custom_fields") if isinstance(ticket.get("custom_fields"), dict) else {}
 
     release_stage = custom_fields.get("Release Stage")
@@ -736,6 +769,11 @@ def _build_production_impact_assessment(
             _append_unique(evidence, match)
         for match in _collect_environment_signal_matches(text, NON_PRODUCTION_SIGNAL_PATTERNS, field_name):
             _append_unique(non_production_signals, match)
+        has_issue_signal = has_issue_signal or _contains_pattern_match(text, ISSUE_SIGNAL_PATTERNS)
+        has_training_request_signal = has_training_request_signal or _contains_pattern_match(
+            text,
+            TRAINING_REQUEST_SIGNAL_PATTERNS,
+        )
 
     for index, comment in enumerate(comments, start=1):
         text = " ".join(filter(None, [str(comment.get("body") or ""), _strip_html(comment.get("html_body"))]))
@@ -744,9 +782,20 @@ def _build_production_impact_assessment(
             _append_unique(evidence, match)
         for match in _collect_environment_signal_matches(text, NON_PRODUCTION_SIGNAL_PATTERNS, source):
             _append_unique(non_production_signals, match)
+        has_issue_signal = has_issue_signal or _contains_pattern_match(text, ISSUE_SIGNAL_PATTERNS)
+        has_training_request_signal = has_training_request_signal or _contains_pattern_match(
+            text,
+            TRAINING_REQUEST_SIGNAL_PATTERNS,
+        )
+
+    has_strong_production_evidence = any(
+        not item.startswith("Mentions production environment.")
+        for item in evidence
+    )
+    is_training_request_only = has_training_request_signal and not has_issue_signal and not has_strong_production_evidence
 
     return ProductionImpactAssessment(
-        is_production_issue=bool(evidence),
+        is_production_issue=bool(evidence) and (has_issue_signal or has_strong_production_evidence) and not is_training_request_only,
         evidence=evidence,
         non_production_signals=non_production_signals,
     )

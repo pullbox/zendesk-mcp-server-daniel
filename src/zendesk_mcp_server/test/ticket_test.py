@@ -1918,6 +1918,67 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
         self.assertFalse(assessment.production_impact.is_production_issue)
         self.assertTrue(assessment.production_impact.non_production_signals)
 
+    def test_training_request_in_prod_does_not_get_production_issue_flag_or_score_100(self) -> None:
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        ticket = {
+            "id": 42793,
+            "subject": "BCP | Request for Session - Sesion para entender Reporte de Telemetria",
+            "description": "Customer asked for a session to understand the telemetry report.",
+            "status": "open",
+            "priority": "normal",
+            "created_at": "2026-03-11T14:58:42Z",
+            "updated_at": "2026-03-11T16:14:20Z",
+            "requester_id": 1001,
+            "assignee_id": 2002,
+            "tags": ["class_dev", "dev", "production_-_app_in_the_wild_with_condition"],
+            "custom_fields": {
+                "Status With": "Open Sales",
+                "Support Stage": "Acknowledged",
+                "Release Stage": "PROD",
+                "Support Class": "Dev",
+            },
+        }
+        comments = [
+            {
+                "author_id": 1001,
+                "public": True,
+                "body": "Hola Abraham, te escribo para solicitar una sesion para aprender a leer el reporte de telemetria.",
+                "html_body": "<p>Hola Abraham, te escribo para solicitar una sesion para aprender a leer el reporte de telemetria.</p>",
+                "created_at": "2026-03-11T14:58:42Z",
+                "attachments": [],
+            },
+            {
+                "author_id": 2002,
+                "public": True,
+                "body": "Claro, hoy por la tarde te queda bien? 1 o 2 pm de Peru les quedaria bien?",
+                "html_body": "<p>Claro, hoy por la tarde te queda bien? 1 o 2 pm de Peru les quedaria bien?</p>",
+                "created_at": "2026-03-11T15:11:32Z",
+                "attachments": [],
+            },
+            {
+                "author_id": 1001,
+                "public": True,
+                "body": "A las 2 estaria bien, enviare una invitacion para poder tener la grabacion local.",
+                "html_body": "<p>A las 2 estaria bien, enviare una invitacion para poder tener la grabacion local.</p>",
+                "created_at": "2026-03-11T16:05:05Z",
+                "attachments": [],
+            },
+        ]
+
+        assessment = server_module._build_ticket_trouble_assessment(
+            ticket=ticket,
+            comments=comments,
+            initial_response_sla_minutes=60,
+            high_priority_stale_hours=8,
+        )
+
+        flag_codes = [flag.code for flag in assessment.flags]
+        self.assertFalse(assessment.production_impact.is_production_issue)
+        self.assertNotIn("production_user_impact", flag_codes)
+        self.assertLess(assessment.risk_score, 100)
+
     def test_crash_ticket_attachment_filename_keyword_counts_as_stacktrace_evidence(self) -> None:
         with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
             server_module = importlib.import_module("zendesk_mcp_server.server")
