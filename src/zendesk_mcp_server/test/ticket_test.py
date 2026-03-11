@@ -816,6 +816,62 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
         self.assertEqual(structured["tickets"][0]["flags"][0]["code"], "missing_initial_response")
         self.assertFalse(response.root.isError)
 
+    def test_scan_tickets_in_trouble_includes_markdown_ticket_list(self) -> None:
+        list_payload = {
+            "tickets": [
+                {"id": 100, "subject": "ACME | Android | Crash", "status": "open", "priority": "high"},
+            ],
+            "count": 1,
+            "page": 1,
+            "per_page": 25,
+            "sort_by": "created_at",
+            "sort_order": "desc",
+            "filters": {
+                "created_last_hours": 12,
+                "exclude_internal": True,
+            },
+            "has_more": False,
+            "next_page": None,
+            "previous_page": None,
+        }
+        full_ticket_payload = {
+            "id": 100,
+            "subject": "ACME | Android | Crash",
+            "status": "open",
+            "priority": "high",
+            "created_at": "2026-03-05T10:00:00Z",
+            "updated_at": "2026-03-05T12:30:00Z",
+            "requester_id": 1002,
+            "tags": [],
+            "custom_fields": {},
+        }
+
+        request = CallToolRequest(
+            method="tools/call",
+            params=CallToolRequestParams(
+                name="scan_tickets_in_trouble",
+                arguments={"created_last_hours": 12, "per_page": 25},
+            ),
+        )
+
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        with (
+            patch.object(server_module, "zendesk_client") as mock_client,
+            patch.object(server_module, "_prepare_ticket_payload", return_value=full_ticket_payload),
+        ):
+            mock_client.get_tickets.return_value = list_payload
+            mock_client.get_ticket_comments.return_value = []
+
+            handler = server_module.mcp._mcp_server.request_handlers[CallToolRequest]
+            response = asyncio.run(handler(request))
+
+        structured = response.root.structuredContent
+        self.assertIn("[100](https://appdomesupport.zendesk.com/agent/tickets/100)", structured["ticket_list_markdown"])
+        self.assertIn("ACME | Android | Crash", structured["ticket_list_markdown"])
+        self.assertFalse(response.root.isError)
+
     def test_scan_tickets_in_trouble_ignores_new_ticket_without_overdue_initial_response(self) -> None:
         list_payload = {
             "tickets": [

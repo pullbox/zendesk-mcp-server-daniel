@@ -484,6 +484,7 @@ class ScanTicketsInTroubleResult(BaseModel):
     created_last_hours: int
     scanned_count: int
     in_trouble_count: int
+    ticket_list_markdown: str = ""
     tickets: list[TicketTroubleAssessment]
 
 
@@ -1303,6 +1304,19 @@ def _build_ticket_trouble_assessment(
     )
 
 
+def _build_ticket_trouble_markdown_list(tickets: list[TicketTroubleAssessment]) -> str:
+    if not tickets:
+        return "No tickets matched the trouble scan."
+
+    lines: list[str] = []
+    for ticket in tickets:
+        ticket_ref = ticket.ticket_link or f"#{ticket.ticket_id}"
+        subject = ticket.subject or "Untitled"
+        status = ticket.status or "unknown"
+        lines.append(f"- {ticket_ref} | {subject} | status={status} | risk={ticket.risk_score}")
+    return "\n".join(lines)
+
+
 @mcp.prompt(name="analyze-ticket", description="Analyze a Zendesk ticket and provide insights")
 def analyze_ticket_prompt(
     ticket_id: Annotated[int, Field(description="The ID of the ticket to analyze")],
@@ -1682,6 +1696,7 @@ def scan_tickets_in_trouble(
         created_last_hours=created_last_hours,
         scanned_count=len(assessments),
         in_trouble_count=in_trouble_count,
+        ticket_list_markdown=_build_ticket_trouble_markdown_list(assessments),
         tickets=assessments,
     )
 
