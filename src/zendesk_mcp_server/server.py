@@ -826,6 +826,17 @@ def _is_no_response_expected_comment(comment: dict[str, Any]) -> bool:
     return any(term in text for term in no_response_expected_terms)
 
 
+def _has_internal_first_comment(comments: list[dict[str, Any]]) -> bool:
+    if not comments:
+        return False
+
+    first_comment = min(
+        comments,
+        key=lambda comment: _parse_iso_datetime(comment.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc),
+    )
+    return not bool(first_comment.get("public"))
+
+
 def _mentions_crash_in_ticket_text(subject: str | None, description: str | None) -> bool:
     return _contains_any(subject, CRASH_SIGNAL_TERMS) or _contains_any(description, CRASH_SIGNAL_TERMS)
 
@@ -872,6 +883,7 @@ def _build_ticket_trouble_assessment(
         public_comments,
         key=lambda c: _parse_iso_datetime(c.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc),
     )
+    has_internal_first_comment = _has_internal_first_comment(comments)
 
     crash_tag_reviewed = "crash_reviewed" in tags
     attachment_evidence_files = []
@@ -935,7 +947,7 @@ def _build_ticket_trouble_assessment(
         if first_public_agent_response_at is not None:
             break
 
-    if created_at is not None and first_public_agent_response_at is None:
+    if created_at is not None and first_public_agent_response_at is None and not has_internal_first_comment:
         reference_time = updated_at or datetime.now(timezone.utc)
         response_delay_minutes = int(max((reference_time - created_at).total_seconds(), 0) // 60)
         if response_delay_minutes > initial_response_sla_minutes:
@@ -949,7 +961,7 @@ def _build_ticket_trouble_assessment(
                     ),
                 )
             )
-    elif created_at is not None and first_public_agent_response_at is not None:
+    elif created_at is not None and first_public_agent_response_at is not None and not has_internal_first_comment:
         response_minutes = int((first_public_agent_response_at - created_at).total_seconds() // 60)
         if response_minutes > initial_response_sla_minutes:
             flags.append(

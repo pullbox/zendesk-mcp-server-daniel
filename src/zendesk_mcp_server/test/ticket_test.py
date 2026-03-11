@@ -939,6 +939,77 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
         self.assertIn("missing_initial_response", flag_codes)
         self.assertFalse(response.root.isError)
 
+    def test_scan_tickets_in_trouble_skips_initial_response_flag_when_first_comment_is_internal(self) -> None:
+        list_payload = {
+            "tickets": [
+                {"id": 9112, "subject": "ACME | iOS | Login issue", "status": "new", "priority": "normal"},
+            ],
+            "count": 1,
+            "page": 1,
+            "per_page": 25,
+            "sort_by": "created_at",
+            "sort_order": "desc",
+            "filters": {
+                "created_last_hours": 4,
+                "exclude_internal": True,
+            },
+            "has_more": False,
+            "next_page": None,
+            "previous_page": None,
+        }
+        full_ticket_payload = {
+            "id": 9112,
+            "subject": "ACME | iOS | Login issue",
+            "status": "new",
+            "priority": "normal",
+            "created_at": "2026-03-05T10:00:00Z",
+            "updated_at": "2026-03-05T12:30:00Z",
+            "requester_id": 1001,
+            "tags": [],
+            "custom_fields": {
+                "Status With": "support",
+                "Support Stage": "intake",
+                "Release Stage": "n/a",
+            },
+        }
+        comments_payload = [
+            {
+                "author_id": 2002,
+                "public": False,
+                "body": "Created internally on behalf of customer.",
+                "html_body": "<p>Created internally on behalf of customer.</p>",
+                "created_at": "2026-03-05T10:00:00Z",
+                "attachments": [],
+            }
+        ]
+
+        request = CallToolRequest(
+            method="tools/call",
+            params=CallToolRequestParams(
+                name="scan_tickets_in_trouble",
+                arguments={"created_last_hours": 4, "per_page": 25},
+            ),
+        )
+
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        with (
+            patch.object(server_module, "zendesk_client") as mock_client,
+            patch.object(server_module, "_prepare_ticket_payload", return_value=full_ticket_payload),
+        ):
+            mock_client.get_tickets.return_value = list_payload
+            mock_client.get_ticket_comments.return_value = comments_payload
+
+            handler = server_module.mcp._mcp_server.request_handlers[CallToolRequest]
+            response = asyncio.run(handler(request))
+
+        structured = response.root.structuredContent
+        self.assertEqual(structured["scanned_count"], 0)
+        self.assertEqual(structured["in_trouble_count"], 0)
+        self.assertEqual(structured["tickets"], [])
+        self.assertFalse(response.root.isError)
+
     def test_scan_tickets_in_trouble_mentions_recent_call_and_datetime_comments(self) -> None:
         list_payload = {
             "tickets": [
@@ -1414,6 +1485,55 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
             assessment.priority_interpretation,
             "Escalated ticket: Zendesk priority mirrors ENG priority.",
         )
+
+    def test_internal_first_comment_skips_initial_response_flags(self) -> None:
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        ticket = {
+            "id": 907,
+            "subject": "ACME | iOS | Login issue",
+            "status": "new",
+            "priority": "normal",
+            "created_at": "2026-03-05T10:00:00Z",
+            "updated_at": "2026-03-05T12:30:00Z",
+            "requester_id": 1001,
+            "tags": [],
+            "custom_fields": {
+                "Status With": "support",
+                "Support Stage": "intake",
+                "Release Stage": "n/a",
+            },
+        }
+        comments = [
+            {
+                "author_id": 2002,
+                "public": False,
+                "body": "Created by Appdome staff for follow-up.",
+                "html_body": "<p>Created by Appdome staff for follow-up.</p>",
+                "created_at": "2026-03-05T10:00:00Z",
+                "attachments": [],
+            },
+            {
+                "author_id": 2002,
+                "public": True,
+                "body": "We are investigating.",
+                "html_body": "<p>We are investigating.</p>",
+                "created_at": "2026-03-05T12:10:00Z",
+                "attachments": [],
+            },
+        ]
+
+        assessment = server_module._build_ticket_trouble_assessment(
+            ticket=ticket,
+            comments=comments,
+            initial_response_sla_minutes=60,
+            high_priority_stale_hours=8,
+        )
+
+        flag_codes = [flag.code for flag in assessment.flags]
+        self.assertNotIn("missing_initial_response", flag_codes)
+        self.assertNotIn("late_initial_response", flag_codes)
 
     def test_crash_ticket_attachment_filename_keyword_counts_as_stacktrace_evidence(self) -> None:
         with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
