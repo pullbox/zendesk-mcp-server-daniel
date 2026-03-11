@@ -101,9 +101,25 @@ Returns a response-drafting prompt for a specific ticket.
 
 Returns the ticket-title naming policy template.
 
+Policy highlights enforced by the prompt:
+- Preferred title shape is `Customer | Context | Issue`.
+- Accepted context segment can be an OS/version, feature, integration/tool, or a generic platform marker like `Platform` / `OS`.
+- `Trial` may appear before the customer name.
+- Case-only differences are ignored.
+- A title is invalid when key context is missing, ambiguous, or the segmented structure is unclear.
+- Reviews must not invent missing facts; missing information must be called out explicitly.
+- If a ticket is waiting on the customer, `Status With` must be `Customer` or the review should be marked invalid.
+- If an escalation field is populated, the ticket should only be treated as properly solved when the customer explicitly confirmed the solution worked.
+
 ### review-ticket-title (`ticket_id`)
 
 Returns the title-review policy plus instructions for reviewing one ticket title.
+
+Expected output format:
+- `Validation: VALID` or `Validation: INVALID`
+- `Reason: ...`
+- `Suggested Title: ...` only when invalid
+- Batch reviews also require `Summary: <count valid> valid, <count invalid> invalid`
 
 ## Tools
 
@@ -126,6 +142,26 @@ Review rubric now requires reporting escalation timing, including:
 - `Time to escalation from ticket creation`
 - for `crash_detected` tickets, explicit escalation-latency reporting (or `Not found` + process gap if timestamp is missing)
 - for `crash_detected` tickets, missing crash identification, missing stacktrace handling, or untimely/unverifiable escalation are hard-fail conditions that require a compliance score of `0`
+
+The review rubric also enforces these evidence and process rules:
+- Use only ticket fields, ticket comments, and attachment metadata as evidence. If something cannot be found, report `Not found`.
+- Timeline output must include: opened, first agent response, crash identified, stacktrace requested, escalated, time to escalation, solution built, solution delivered, and customer acknowledgement.
+- Attachment evidence output must explicitly list crash-related attachments, stacktraces, replication videos, and other crash artifacts by filename when present.
+- Tom Tovar participation must be reported from `tom_tovar_*` metadata and comments.
+- Every timeline/compliance statement should identify the evidence source and author.
+- Email-chain preambles and forwarded-history text must not be used to justify or excuse agent handling.
+- Delay justification is valid only when the agent explicitly documented the reason in actions/internal notes.
+- Customer-side context in the opening message cannot be used to excuse agent delay.
+- Escalated tickets cannot be treated as customer-acknowledged unless the customer explicitly confirmed the fix worked.
+- For `crash_detected` / `anr_yes` tickets:
+  - stacktrace evidence counts only when comments or attachments explicitly contain crash-log/stacktrace evidence
+  - if stacktrace evidence is missing, the assigned engineer must explicitly request it
+  - the first stacktrace/crash-log request should happen within 1 hour of crash identification
+  - escalation timing must always be calculated from ticket creation, and missing escalation timestamps must be flagged as a process gap
+  - if crash/ANR handling is not explicitly covered in Timeline or Process Review, the compliance score must be `0`
+  - if no stacktrace evidence exists and no explicit request exists, the compliance score must be `0`
+  - if the first stacktrace request is more than 1 hour late, the compliance score must be `0`
+  - if escalation is more than 1 hour late or cannot be verified, the compliance score must be `0`
 
 ### get_tickets
 
@@ -181,11 +217,28 @@ Scan non-solved tickets created in the last N hours and flag likely QA/process i
 
 - Checks include:
   - title format
-  - crash-ticket process gaps
+  - production-user-impact detection
+  - crash-ticket process gaps and missing crash tags
   - required status/custom-field completeness
-  - late or missing initial response
-  - customer public comment without follow-up
-  - high-priority tickets with stale updates
+  - late or missing initial public response
+  - customer public comment without timely follow-up
+  - solved/closed tickets without explicit customer confirmation
+  - stale high-priority escalations and stale support-owned tickets
+
+Current flag conditions include:
+- `title_incorrect`: subject does not match the expected `Customer | Context | Issue` structure.
+- `production_user_impact`: ticket text/comments indicate a live production issue affecting real users/customers.
+- `status_fields_incomplete`: one or more of `Status With`, `Support Stage`, or `Release Stage` is missing.
+- `missing_initial_response`: no public agent reply after the configured first-response SLA, unless the first comment was internal.
+- `late_initial_response`: first public agent reply exceeded the configured first-response SLA.
+- `customer_comment_no_response`: a customer public comment did not receive a public agent follow-up within the configured SLA; also used when a ticket stays open for days after a customer says no response is needed.
+- `solved_without_customer_confirmation`: ticket is solved/closed without explicit customer confirmation in public comments.
+- `high_priority_no_recent_updates`: escalated `high`/`urgent` ticket has been stale longer than the configured threshold.
+- `support_owned_no_recent_updates`: non-escalated support-owned ticket has been stale longer than the configured threshold.
+- `crash_tag_missing`: ticket text suggests a crash, but it lacks `crash_detected` / `anr_yes`.
+- `crash_tag_missing_unreviewed_attachment_evidence`: crash-related attachments exist, but the ticket lacks `crash_detected` / `anr_yes` and also lacks the `crash_reviewed` override tag.
+- `crash_process_gap`: crash/ANR ticket has neither stacktrace evidence nor an explicit request for crash logs.
+- `late_stacktrace_request`: crash/ANR ticket requested stacktrace evidence more than 60 minutes after ticket creation when evidence was not already present.
 
 ### sample_solved_tickets_for_agent
 
@@ -212,6 +265,7 @@ Samples solved tickets and returns a combined review input packet for all sample
 
 - Output:
   - Structured result including sampled ticket ids and `review_input` (rubric + ticket evidence bundle).
+  - Also highlights production-impact tickets separately via `production_ticket_ids`, `production_ticket_links`, and `production_ticket_count`.
 
 ### get_ticket_comments (`ticket_id`)
 
