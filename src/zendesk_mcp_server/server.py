@@ -453,6 +453,8 @@ class TicketTroubleAssessment(BaseModel):
     subject: str | None = None
     status: str | None = None
     priority: str | None = None
+    is_escalated: bool = False
+    priority_interpretation: str | None = None
     in_trouble: bool
     risk_score: int
     flags: list[TicketTroubleFlag]
@@ -485,6 +487,7 @@ TROUBLE_FLAG_WEIGHTS: dict[str, int] = {
     "customer_comment_no_response": 30,
     "solved_without_customer_confirmation": 10,
     "high_priority_no_recent_updates": 25,
+    "support_owned_no_recent_updates": 25,
     "late_initial_response": 20,
     "late_stacktrace_request": 44,
     "title_incorrect": 45,
@@ -492,7 +495,6 @@ TROUBLE_FLAG_WEIGHTS: dict[str, int] = {
 SEVERITY_FALLBACK_WEIGHTS = {"high": 30, "medium": 15, "low": 5}
 SEVERITY_RANK = {"high": 3, "medium": 2, "low": 1}
 CUSTOMER_FOLLOW_UP_SLA_HOURS = 4
-CUSTOMER_FOLLOW_UP_PRIORITIES = {"low", "normal"}
 NO_RESPONSE_EXPECTED_OPEN_STALE_DAYS = 5
 OPEN_TICKET_STATUSES = {"new", "open", "pending", "hold", "on-hold"}
 CRASH_SIGNAL_TERMS = [
@@ -828,6 +830,21 @@ def _mentions_crash_in_ticket_text(subject: str | None, description: str | None)
     return _contains_any(subject, CRASH_SIGNAL_TERMS) or _contains_any(description, CRASH_SIGNAL_TERMS)
 
 
+def _is_escalated_ticket(ticket: dict[str, Any]) -> bool:
+    escalation_display = ticket.get("escalation_status_display")
+    escalation_tag = ticket.get("escalation_status_tag")
+    if escalation_display or escalation_tag:
+        return True
+
+    custom_fields = ticket.get("custom_fields") if isinstance(ticket.get("custom_fields"), dict) else {}
+    escalation_value = custom_fields.get("Escalation Status") or custom_fields.get("Escalation")
+    if escalation_value is None:
+        return False
+
+    normalized_value = str(escalation_value).strip().lower()
+    return normalized_value not in {"", "n/a", "none", "null", "not set"}
+
+
 def _build_ticket_trouble_assessment(
     ticket: dict[str, Any],
     comments: list[dict[str, Any]],
@@ -846,6 +863,8 @@ def _build_ticket_trouble_assessment(
     created_at = _parse_iso_datetime(ticket.get("created_at"))
     updated_at = _parse_iso_datetime(ticket.get("updated_at"))
     custom_fields = ticket.get("custom_fields") if isinstance(ticket.get("custom_fields"), dict) else {}
+    is_escalated = _is_escalated_ticket(ticket)
+    status_with = str(custom_fields.get("Status With") or "").strip().lower()
 
     public_comments = [c for c in comments if c.get("public")]
     crash_attachment_summary = _build_crash_attachment_summary(comments=comments, requester_id=requester_id)
@@ -944,70 +963,54 @@ def _build_ticket_trouble_assessment(
     customer_public_comments = [
         c for c in public_comments_sorted if requester_id is not None and c.get("author_id") == requester_id
     ]
-    if priority in CUSTOMER_FOLLOW_UP_PRIORITIES:
-        follow_up_deadline = timedelta(hours=CUSTOMER_FOLLOW_UP_SLA_HOURS)
-        for customer_comment in customer_public_comments:
-            customer_time = _parse_iso_datetime(customer_comment.get("created_at"))
-            if customer_time is None:
+    follow_up_deadline = timedelta(hours=CUSTOMER_FOLLOW_UP_SLA_HOURS)
+    for customer_comment in customer_public_comments:
+        customer_time = _parse_iso_datetime(customer_comment.get("created_at"))
+        if customer_time is None:
+            continue
+        has_follow_up = False
+        first_follow_up_after_customer: datetime | None = None
+        for possible_reply in public_comments_sorted:
+            reply_time = _parse_iso_datetime(possible_reply.get("created_at"))
+            if reply_time is None:
                 continue
-            has_follow_up = False
-            first_follow_up_after_customer: datetime | None = None
-            for possible_reply in public_comments_sorted:
-                reply_time = _parse_iso_datetime(possible_reply.get("created_at"))
-                if reply_time is None:
-                    continue
-                if reply_time <= customer_time:
-                    continue
-                if requester_id is not None and possible_reply.get("author_id") == requester_id:
-                    continue
-                has_follow_up = True
-                first_follow_up_after_customer = reply_time
-                break
-
-            if _is_no_response_expected_comment(customer_comment):
-                reference_time = updated_at or datetime.now(timezone.utc)
-                has_any_later_public_comment = any(
-                    (_parse_iso_datetime(possible_reply.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc))
-                    > customer_time
-                    for possible_reply in public_comments_sorted
-                )
-                if (
-                    status in OPEN_TICKET_STATUSES
-                    and (reference_time - customer_time) > timedelta(days=NO_RESPONSE_EXPECTED_OPEN_STALE_DAYS)
-                    and not has_any_later_public_comment
-                ):
-                    flags.append(
-                        TicketTroubleFlag(
-                            code="customer_comment_no_response",
-                            severity="high",
-                            message=(
-                                "Ticket stayed open more than "
-                                f"{NO_RESPONSE_EXPECTED_OPEN_STALE_DAYS} days after a no-response-expected "
-                                "customer update, with no later public comments."
-                            ),
-                        )
-                    )
-                    break
+            if reply_time <= customer_time:
                 continue
-
-            if has_follow_up and first_follow_up_after_customer is not None:
-                response_delay = first_follow_up_after_customer - customer_time
-                if response_delay > follow_up_deadline:
-                    flags.append(
-                        TicketTroubleFlag(
-                            code="customer_comment_no_response",
-                            severity="high",
-                            message=(
-                                "Customer public comment did not receive a public agent response "
-                                f"within {CUSTOMER_FOLLOW_UP_SLA_HOURS}h."
-                            ),
-                        )
-                    )
-                    break
+            if requester_id is not None and possible_reply.get("author_id") == requester_id:
                 continue
+            has_follow_up = True
+            first_follow_up_after_customer = reply_time
+            break
 
+        if _is_no_response_expected_comment(customer_comment):
             reference_time = updated_at or datetime.now(timezone.utc)
-            if reference_time - customer_time > follow_up_deadline:
+            has_any_later_public_comment = any(
+                (_parse_iso_datetime(possible_reply.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc))
+                > customer_time
+                for possible_reply in public_comments_sorted
+            )
+            if (
+                status in OPEN_TICKET_STATUSES
+                and (reference_time - customer_time) > timedelta(days=NO_RESPONSE_EXPECTED_OPEN_STALE_DAYS)
+                and not has_any_later_public_comment
+            ):
+                flags.append(
+                    TicketTroubleFlag(
+                        code="customer_comment_no_response",
+                        severity="high",
+                        message=(
+                            "Ticket stayed open more than "
+                            f"{NO_RESPONSE_EXPECTED_OPEN_STALE_DAYS} days after a no-response-expected "
+                            "customer update, with no later public comments."
+                        ),
+                    )
+                )
+                break
+            continue
+
+        if has_follow_up and first_follow_up_after_customer is not None:
+            response_delay = first_follow_up_after_customer - customer_time
+            if response_delay > follow_up_deadline:
                 flags.append(
                     TicketTroubleFlag(
                         code="customer_comment_no_response",
@@ -1019,6 +1022,21 @@ def _build_ticket_trouble_assessment(
                     )
                 )
                 break
+            continue
+
+        reference_time = updated_at or datetime.now(timezone.utc)
+        if reference_time - customer_time > follow_up_deadline:
+            flags.append(
+                TicketTroubleFlag(
+                    code="customer_comment_no_response",
+                    severity="high",
+                    message=(
+                        "Customer public comment did not receive a public agent response "
+                        f"within {CUSTOMER_FOLLOW_UP_SLA_HOURS}h."
+                    ),
+                )
+            )
+            break
 
     confirmation_terms = ["resolved", "works", "working", "fixed", "thank", "confirmed", "solved"]
     has_customer_confirmation = any(
@@ -1034,17 +1052,29 @@ def _build_ticket_trouble_assessment(
             )
         )
 
-    if priority in {"high", "urgent"}:
-        stale_hours = ticket.get("stale_age_hours")
-        if stale_hours is None and updated_at is not None:
-            stale_hours = int(max((datetime.now(timezone.utc) - updated_at).total_seconds(), 0) // 3600)
-        if stale_hours is not None and int(stale_hours) > high_priority_stale_hours:
+    stale_hours = ticket.get("stale_age_hours")
+    if stale_hours is None and updated_at is not None:
+        stale_hours = int(max((datetime.now(timezone.utc) - updated_at).total_seconds(), 0) // 3600)
+
+    if stale_hours is not None and int(stale_hours) > high_priority_stale_hours and status in OPEN_TICKET_STATUSES:
+        if is_escalated and priority in {"high", "urgent"}:
             flags.append(
                 TicketTroubleFlag(
                     code="high_priority_no_recent_updates",
                     severity="high",
                     message=(
                         f"High-priority ticket has no recent update for {int(stale_hours)}h "
+                        f"(threshold {high_priority_stale_hours}h)."
+                    ),
+                )
+            )
+        elif "support" in status_with:
+            flags.append(
+                TicketTroubleFlag(
+                    code="support_owned_no_recent_updates",
+                    severity="high",
+                    message=(
+                        f"Non-escalated support-owned ticket has no recent update for {int(stale_hours)}h "
                         f"(threshold {high_priority_stale_hours}h)."
                     ),
                 )
@@ -1123,6 +1153,12 @@ def _build_ticket_trouble_assessment(
         subject=subject,
         status=status,
         priority=priority,
+        is_escalated=is_escalated,
+        priority_interpretation=(
+            "Escalated ticket: Zendesk priority mirrors ENG priority."
+            if is_escalated
+            else "Non-escalated ticket: Zendesk priority is not treated as severity; use flags and risk score."
+        ),
         in_trouble=bool(sorted_flags),
         risk_score=risk_score,
         flags=sorted_flags,
@@ -1279,6 +1315,8 @@ def get_ticket_summary(
         "",
         "## Trouble Scan",
         f"Reviewed Ticket ID: {resolved_ticket_id}",
+        f"Escalated: {'Yes' if assessment.is_escalated else 'No'}",
+        f"Priority Interpretation: {assessment.priority_interpretation}",
         f"In Trouble: {'Yes' if assessment.in_trouble else 'No'}",
         f"Risk Score: {assessment.risk_score}",
     ]
@@ -1458,7 +1496,7 @@ def scan_tickets_in_trouble(
     ] = DEFAULT_INITIAL_RESPONSE_SLA_MINUTES,
     high_priority_stale_hours: Annotated[
         int,
-        Field(description="Threshold for stale high-priority tickets in hours."),
+        Field(description="Threshold in hours for stale escalated high-priority or stale support-owned tickets."),
     ] = DEFAULT_HIGH_PRIORITY_STALE_HOURS,
 ) -> ScanTicketsInTroubleResult:
     list_result = zendesk_client.get_tickets(

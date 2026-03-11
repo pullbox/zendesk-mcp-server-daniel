@@ -1332,6 +1332,89 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
         self.assertIn("customer_comment_no_response", flag_codes)
         self.assertFalse(response.root.isError)
 
+    def test_non_escalated_support_owned_stale_ticket_is_flagged_without_using_priority(self) -> None:
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        ticket = {
+            "id": 905,
+            "subject": "ACME | iOS | Login issue",
+            "status": "open",
+            "priority": "low",
+            "created_at": "2026-03-05T10:00:00Z",
+            "updated_at": "2026-03-05T19:30:00Z",
+            "requester_id": 1001,
+            "tags": [],
+            "custom_fields": {
+                "Status With": "Support Engineer",
+                "Support Stage": "investigation",
+                "Release Stage": "n/a",
+            },
+            "stale_age_hours": 9,
+        }
+        comments = [
+            {
+                "author_id": 2002,
+                "public": True,
+                "body": "Investigating this now.",
+                "html_body": "<p>Investigating this now.</p>",
+                "created_at": "2026-03-05T10:15:00Z",
+                "attachments": [],
+            }
+        ]
+
+        assessment = server_module._build_ticket_trouble_assessment(
+            ticket=ticket,
+            comments=comments,
+            initial_response_sla_minutes=60,
+            high_priority_stale_hours=8,
+        )
+
+        flag_codes = [flag.code for flag in assessment.flags]
+        self.assertIn("support_owned_no_recent_updates", flag_codes)
+        self.assertFalse(assessment.is_escalated)
+        self.assertEqual(
+            assessment.priority_interpretation,
+            "Non-escalated ticket: Zendesk priority is not treated as severity; use flags and risk score.",
+        )
+
+    def test_escalated_high_priority_stale_ticket_keeps_eng_priority_signal(self) -> None:
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        ticket = {
+            "id": 906,
+            "subject": "ACME | iOS | Crash on launch",
+            "status": "open",
+            "priority": "high",
+            "created_at": "2026-03-05T10:00:00Z",
+            "updated_at": "2026-03-05T19:30:00Z",
+            "requester_id": 1001,
+            "tags": [],
+            "custom_fields": {
+                "Status With": "Support Engineer",
+                "Support Stage": "investigation",
+                "Release Stage": "n/a",
+                "Escalation Status": "Eng Escalated",
+            },
+            "stale_age_hours": 9,
+        }
+
+        assessment = server_module._build_ticket_trouble_assessment(
+            ticket=ticket,
+            comments=[],
+            initial_response_sla_minutes=60,
+            high_priority_stale_hours=8,
+        )
+
+        flag_codes = [flag.code for flag in assessment.flags]
+        self.assertIn("high_priority_no_recent_updates", flag_codes)
+        self.assertTrue(assessment.is_escalated)
+        self.assertEqual(
+            assessment.priority_interpretation,
+            "Escalated ticket: Zendesk priority mirrors ENG priority.",
+        )
+
     def test_crash_ticket_attachment_filename_keyword_counts_as_stacktrace_evidence(self) -> None:
         with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
             server_module = importlib.import_module("zendesk_mcp_server.server")
@@ -1597,6 +1680,65 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
         self.assertIn("## Trouble Scan", summary_text)
         self.assertIn("crash_tag_missing", summary_text)
         self.assertIn("Crash-related attachments available:", summary_text)
+        self.assertFalse(response.root.isError)
+
+    def test_get_ticket_summary_explains_non_escalated_priority_handling(self) -> None:
+        request = CallToolRequest(
+            method="tools/call",
+            params=CallToolRequestParams(
+                name="get_ticket_summary",
+                arguments={"ticket_id": 9911},
+            ),
+        )
+
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        ticket_payload = {
+            "id": 9911,
+            "subject": "ACME | iOS | Login issue",
+            "description": "Customer cannot log in.",
+            "status": "open",
+            "priority": "low",
+            "created_at": "2026-03-05T10:00:00Z",
+            "updated_at": "2026-03-05T19:10:00Z",
+            "requester_id": 1001,
+            "tags": [],
+            "custom_fields": {
+                "Status With": "Support Engineer",
+                "Support Stage": "investigation",
+                "Release Stage": "n/a",
+            },
+            "stale_age_hours": 9,
+            "ticket_url": "https://appdomesupport.zendesk.com/agent/tickets/9911",
+            "ticket_link": "[9911](https://appdomesupport.zendesk.com/agent/tickets/9911)",
+        }
+        comments_payload = [
+            {
+                "author_id": 2002,
+                "public": True,
+                "body": "Investigating now.",
+                "html_body": "<p>Investigating now.</p>",
+                "created_at": "2026-03-05T10:05:00Z",
+                "attachments": [],
+            }
+        ]
+
+        with (
+            patch.object(server_module, "_prepare_ticket_payload", return_value=ticket_payload),
+            patch.object(server_module, "zendesk_client") as mock_client,
+        ):
+            mock_client.get_ticket_comments.return_value = comments_payload
+            handler = server_module.mcp._mcp_server.request_handlers[CallToolRequest]
+            response = asyncio.run(handler(request))
+
+        summary_text = response.root.content[0].text
+        self.assertIn("Escalated: No", summary_text)
+        self.assertIn(
+            "Priority Interpretation: Non-escalated ticket: Zendesk priority is not treated as severity; use flags and risk score.",
+            summary_text,
+        )
+        self.assertIn("support_owned_no_recent_updates", summary_text)
         self.assertFalse(response.root.isError)
 
     def test_review_ticket_resolves_merged_reference_from_last_comment(self) -> None:
