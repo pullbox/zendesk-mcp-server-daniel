@@ -547,32 +547,45 @@ CRASH_SIGNAL_TERMS = [
     "fatal exception",
     "segmentation fault",
 ]
-CALL_PLATFORM_PATTERN = re.compile(
-    r"\b(phone call|call|zoom|meeting|google meet|meet|teams)\b",
+MEETING_REFERENCE_PATTERN = re.compile(
+    r"\b(?:phone call|conference call|zoom(?: meeting)?|google meet|teams(?: meeting)?|webex|meeting|screen ?share|screenshare)\b",
     re.IGNORECASE,
 )
-CALL_SCHEDULING_PATTERN = re.compile(
-    r"("
-    r"\b(?:schedule|scheduled|scheduling|reschedule|rescheduled|rescheduling)\b.{0,40}"
-    r"\b(?:call|phone call|meeting|google meet|meet|teams|zoom)\b"
-    r"|"
-    r"\b(?:call|phone call|meeting|google meet|meet|teams|zoom)\b.{0,40}"
-    r"\b(?:schedule|scheduled|scheduling|reschedule|rescheduled|rescheduling)\b"
-    r")",
-    re.IGNORECASE | re.DOTALL,
+MEETING_REQUEST_OR_SCHEDULE_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(
+        r"\b(?:schedule|scheduled|scheduling|reschedule|rescheduled|rescheduling)\b.{0,25}"
+        r"\b(?:a\s+|the\s+)?(?:phone call|conference call|call|zoom(?: meeting)?|google meet|teams(?: meeting)?|webex|meeting|screen ?share|screenshare)\b",
+        re.IGNORECASE | re.DOTALL,
+    ),
+    re.compile(
+        r"\b(?:let'?s|can we|could we|should we|please|want to|would like to|able to)\b.{0,25}"
+        r"\b(?:schedule|set up|arrange|book|have|join|jump on|do)\b.{0,20}"
+        r"\b(?:a\s+|the\s+)?(?:phone call|conference call|call|zoom(?: meeting)?|google meet|teams(?: meeting)?|webex|meeting|screen ?share|screenshare)\b",
+        re.IGNORECASE | re.DOTALL,
+    ),
+    re.compile(
+        r"\b(?:jump on|join|have|set up|arrange|book|do)\b.{0,20}"
+        r"\b(?:a\s+|the\s+)?(?:phone call|conference call|call|zoom(?: meeting)?|google meet|teams(?: meeting)?|webex|meeting|screen ?share|screenshare)\b",
+        re.IGNORECASE | re.DOTALL,
+    ),
+    re.compile(
+        r"\b(?:phone call|conference call|call|zoom(?: meeting)?|google meet|teams(?: meeting)?|webex|meeting)\b.{0,20}"
+        r"\b(?:confirmed|booked|scheduled|arranged|requested)\b",
+        re.IGNORECASE | re.DOTALL,
+    ),
 )
-MEETING_SUMMARY_TERMS = [
-    "meeting summary",
-    "call summary",
-    "meeting notes",
-    "call notes",
-    "recap",
-    "summary",
-    "on the call",
-    "during the call",
-    "next steps",
-    "action items",
-]
+MEETING_SUMMARY_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\b(?:call summary|meeting summary|call notes|meeting notes)\b", re.IGNORECASE),
+    re.compile(r"\b(?:after|following)\s+(?:our|the)\s+(?:call|meeting)\b", re.IGNORECASE),
+    re.compile(r"\bas discussed\s+(?:on|during|in)\s+(?:our|the)\s+(?:call|meeting)\b", re.IGNORECASE),
+    re.compile(r"\b(?:on|during)\s+(?:our|the)\s+(?:call|meeting)\b", re.IGNORECASE),
+    re.compile(r"\brecap\s+(?:from|of)\s+(?:our|the)\s+(?:call|meeting)\b", re.IGNORECASE),
+)
+MEETING_CONTEXT_TIME_PATTERN = re.compile(
+    r"\b(?:today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|"
+    r"jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec|\d{1,2}/\d{1,2}(?:/\d{2,4})?|\d{4}-\d{2}-\d{2}|\d{1,2}:\d{2}\s*(?:am|pm)?)\b",
+    re.IGNORECASE,
+)
 DATE_OR_TIME_PATTERN = re.compile(
     r"\b("
     r"\d{4}-\d{2}-\d{2}"
@@ -728,7 +741,23 @@ def _comment_text(comment: dict[str, Any]) -> str:
 def _contains_call_mention(text: str | None) -> bool:
     if not text:
         return False
-    return bool(CALL_PLATFORM_PATTERN.search(text) or CALL_SCHEDULING_PATTERN.search(text))
+    if any(pattern.search(text) for pattern in MEETING_REQUEST_OR_SCHEDULE_PATTERNS):
+        return True
+    return bool(
+        MEETING_REFERENCE_PATTERN.search(text)
+        and MEETING_CONTEXT_TIME_PATTERN.search(text)
+    )
+
+
+def _classify_meeting_reference(text: str | None) -> tuple[bool, datetime | None]:
+    if not text:
+        return False, None
+
+    if not _contains_call_mention(text):
+        return False, None
+
+    scheduled_at = _extract_meeting_scheduled_at(text)
+    return True, scheduled_at
 
 
 def _build_customer_unhappy_flag(
@@ -1010,10 +1039,7 @@ def _is_meeting_summary_comment(
         return False
 
     text = _comment_text(comment)
-    lowered = text.lower()
-    return _contains_call_mention(text) and any(
-        term in lowered for term in MEETING_SUMMARY_TERMS
-    )
+    return any(pattern.search(text) for pattern in MEETING_SUMMARY_PATTERNS)
 
 
 def _build_meeting_summary_flag(
@@ -1033,13 +1059,15 @@ def _build_meeting_summary_flag(
 
     for comment in public_comments_sorted:
         text = _comment_text(comment)
-        if not _contains_call_mention(text):
+        is_meeting_reference, scheduled_at = _classify_meeting_reference(text)
+        if not is_meeting_reference:
             continue
         if _is_meeting_summary_comment(comment, requester_id=requester_id, assignee_id=assignee_id):
             continue
 
         comment_time = _parse_iso_datetime(comment.get("created_at"))
-        scheduled_at = _extract_meeting_scheduled_at(text, fallback_year=comment_time.year if comment_time else None)
+        if scheduled_at is None:
+            scheduled_at = _extract_meeting_scheduled_at(text, fallback_year=comment_time.year if comment_time else None)
         if scheduled_at is not None and scheduled_at > reference_time:
             continue
 
