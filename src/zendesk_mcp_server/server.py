@@ -517,7 +517,9 @@ TROUBLE_FLAG_WEIGHTS: dict[str, int] = {
     "missing_initial_response": 34,
     "crash_process_gap": 45,
     "crash_tag_missing": 50,
-    "customer_unhappy": 40,
+    "internal_tag_title_mismatch": 18,
+    "customer_urgency": 51,
+    "customer_unhappy": 52,
     "ticket_report_request": 32,
     "meeting_summary_missing": 28,
     "status_fields_incomplete": 24,
@@ -686,6 +688,18 @@ TICKET_REPORT_REQUEST_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bzendesk\s+ticket\s+report\b", re.IGNORECASE),
     re.compile(r"\breporte\s+de\s+tickets\s+de\s+zendesk\b", re.IGNORECASE),
 )
+CUSTOMER_URGENCY_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\burgent\b", re.IGNORECASE),
+    re.compile(r"\burgency\b", re.IGNORECASE),
+    re.compile(r"\bhigh[ -]?priority\b", re.IGNORECASE),
+    re.compile(r"\btop[ -]?priority\b", re.IGNORECASE),
+    re.compile(r"\bpriority\s+(?:issue|request|case|ticket|matter)\b", re.IGNORECASE),
+    re.compile(r"\basap\b", re.IGNORECASE),
+    re.compile(r"\bas soon as possible\b", re.IGNORECASE),
+    re.compile(r"\bimmediate(?:ly)?\b", re.IGNORECASE),
+    re.compile(r"\btime[- ]sensitive\b", re.IGNORECASE),
+    re.compile(r"\bcritical\b", re.IGNORECASE),
+)
 UNHAPPY_COMMENT_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bnot\s+happy\b", re.IGNORECASE),
     re.compile(r"\bunhappy\b", re.IGNORECASE),
@@ -786,6 +800,55 @@ def _build_customer_unhappy_flag(
                     f"Evidence: '{match.group(0)}' in {source} at {created_at}."
                 ),
             )
+    return None
+
+
+def _build_customer_urgency_flag(
+    ticket: dict[str, Any],
+    comments: list[dict[str, Any]],
+    requester_id: int | None,
+) -> TicketTroubleFlag | None:
+    subject = str(ticket.get("subject") or "")
+    description = str(ticket.get("description") or "")
+
+    for field_name, text in (("subject", subject), ("description", description)):
+        for pattern in CUSTOMER_URGENCY_PATTERNS:
+            match = pattern.search(text)
+            if not match:
+                continue
+            return TicketTroubleFlag(
+                code="customer_urgency",
+                severity="high",
+                message=(
+                    "Customer language marks this ticket as urgent/high-priority; highlight in scan results. "
+                    f"Evidence: '{match.group(0)}' in ticket {field_name}."
+                ),
+            )
+
+    for comment in sorted(
+        comments,
+        key=lambda c: _parse_iso_datetime(c.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc),
+        reverse=True,
+    ):
+        if requester_id is not None and comment.get("author_id") != requester_id:
+            continue
+        text = _comment_text(comment)
+        if not text:
+            continue
+        for pattern in CUSTOMER_URGENCY_PATTERNS:
+            match = pattern.search(text)
+            if not match:
+                continue
+            created_at = comment.get("created_at") or "unknown time"
+            return TicketTroubleFlag(
+                code="customer_urgency",
+                severity="high",
+                message=(
+                    "Customer explicitly marked this issue as urgent/high-priority; highlight in scan results. "
+                    f"Evidence: '{match.group(0)}' in customer_public_comment at {created_at}."
+                ),
+            )
+
     return None
 
 
@@ -1272,6 +1335,15 @@ def _is_title_structured(subject: str | None) -> bool:
     return len(segments) >= 3
 
 
+def _has_internal_tag_title_mismatch(ticket: dict[str, Any]) -> bool:
+    tags = {str(tag).strip().lower() for tag in (ticket.get("tags") or [])}
+    if "internal" not in tags:
+        return False
+
+    subject = str(ticket.get("subject") or "")
+    return re.search(r"\binternal\b", subject, re.IGNORECASE) is None
+
+
 def _is_no_response_expected_comment(comment: dict[str, Any]) -> bool:
     body = str(comment.get("body") or "").lower()
     html_body = str(comment.get("html_body") or "").lower()
@@ -1360,6 +1432,18 @@ def _build_ticket_trouble_assessment(
             )
         )
 
+    if _has_internal_tag_title_mismatch(ticket):
+        flags.append(
+            TicketTroubleFlag(
+                code="internal_tag_title_mismatch",
+                severity="medium",
+                message=(
+                    'Ticket has the "internal" tag, but the title does not include the word "internal"; '
+                    "possible system tagging/title-sync issue."
+                ),
+            )
+        )
+
     if production_impact.is_production_issue:
         evidence_preview = "; ".join(production_impact.evidence[:3])
         flags.append(
@@ -1372,6 +1456,14 @@ def _build_ticket_trouble_assessment(
                 ),
             )
         )
+
+    customer_urgency_flag = _build_customer_urgency_flag(
+        ticket=ticket,
+        comments=comments,
+        requester_id=requester_id,
+    )
+    if customer_urgency_flag is not None:
+        flags.append(customer_urgency_flag)
 
     unhappy_comment_flag = _build_customer_unhappy_flag(comments=comments, requester_id=requester_id)
     if unhappy_comment_flag is not None:
@@ -1662,7 +1754,15 @@ def _build_ticket_trouble_markdown_list(tickets: list[TicketTroubleAssessment]) 
         ticket_ref = ticket.ticket_link or f"#{ticket.ticket_id}"
         subject = ticket.subject or "Untitled"
         status = ticket.status or "unknown"
-        lines.append(f"- {ticket_ref} | {subject} | status={status} | risk={ticket.risk_score}")
+        highlights: list[str] = []
+        if any(flag.code == "customer_urgency" for flag in ticket.flags):
+            highlights.append("CUSTOMER-URGENT")
+        if any(flag.code == "production_user_impact" for flag in ticket.flags):
+            highlights.append("PROD-IMPACT")
+        if any(flag.code == "customer_unhappy" for flag in ticket.flags):
+            highlights.append("CUSTOMER-UNHAPPY")
+        highlight_text = f" | highlights={','.join(highlights)}" if highlights else ""
+        lines.append(f"- {ticket_ref} | {subject} | status={status} | risk={ticket.risk_score}{highlight_text}")
     return "\n".join(lines)
 
 

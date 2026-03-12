@@ -872,6 +872,85 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
         self.assertIn("ACME | Android | Crash", structured["ticket_list_markdown"])
         self.assertFalse(response.root.isError)
 
+    def test_scan_tickets_in_trouble_markdown_highlights_customer_urgency(self) -> None:
+        list_payload = {
+            "tickets": [
+                {"id": 42468, "subject": "ACME | Android | Login issue", "status": "open", "priority": "normal"},
+            ],
+            "count": 1,
+            "page": 1,
+            "per_page": 25,
+            "sort_by": "created_at",
+            "sort_order": "desc",
+            "filters": {
+                "created_last_hours": 12,
+                "exclude_internal": True,
+            },
+            "has_more": False,
+            "next_page": None,
+            "previous_page": None,
+        }
+        full_ticket_payload = {
+            "id": 42468,
+            "subject": "ACME | Android | Login issue",
+            "description": "This issue is urgent for the customer.",
+            "status": "open",
+            "priority": "normal",
+            "created_at": "2026-03-05T10:00:00Z",
+            "updated_at": "2026-03-05T12:30:00Z",
+            "requester_id": 1002,
+            "tags": [],
+            "custom_fields": {
+                "Status With": "support",
+                "Support Stage": "investigation",
+                "Release Stage": "PROD",
+            },
+        }
+        comments = [
+            {
+                "author_id": 1002,
+                "public": True,
+                "body": "Please treat this as urgent.",
+                "html_body": "<p>Please treat this as urgent.</p>",
+                "created_at": "2026-03-05T10:05:00Z",
+                "attachments": [],
+            },
+            {
+                "author_id": 2002,
+                "public": True,
+                "body": "We are looking into it.",
+                "html_body": "<p>We are looking into it.</p>",
+                "created_at": "2026-03-05T10:20:00Z",
+                "attachments": [],
+            },
+        ]
+
+        request = CallToolRequest(
+            method="tools/call",
+            params=CallToolRequestParams(
+                name="scan_tickets_in_trouble",
+                arguments={"created_last_hours": 12, "per_page": 25},
+            ),
+        )
+
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        with (
+            patch.object(server_module, "zendesk_client") as mock_client,
+            patch.object(server_module, "_prepare_ticket_payload", return_value=full_ticket_payload),
+        ):
+            mock_client.get_tickets.return_value = list_payload
+            mock_client.get_ticket_comments.return_value = comments
+
+            handler = server_module.mcp._mcp_server.request_handlers[CallToolRequest]
+            response = asyncio.run(handler(request))
+
+        structured = response.root.structuredContent
+        self.assertIn("highlights=CUSTOMER-URGENT", structured["ticket_list_markdown"])
+        self.assertEqual(structured["tickets"][0]["flags"][0]["code"], "customer_urgency")
+        self.assertFalse(response.root.isError)
+
     def test_scan_tickets_in_trouble_ignores_new_ticket_without_overdue_initial_response(self) -> None:
         list_payload = {
             "tickets": [
@@ -1917,6 +1996,67 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
         self.assertNotIn("missing_initial_response", flag_codes)
         self.assertNotIn("late_initial_response", flag_codes)
 
+    def test_internal_tag_without_internal_in_title_is_flagged_as_system_mismatch(self) -> None:
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        ticket = {
+            "id": 908,
+            "subject": "ACME | iOS | Login issue",
+            "status": "open",
+            "priority": "normal",
+            "created_at": "2026-03-05T10:00:00Z",
+            "updated_at": "2026-03-05T10:30:00Z",
+            "requester_id": 1001,
+            "tags": ["internal"],
+            "custom_fields": {
+                "Status With": "support",
+                "Support Stage": "investigation",
+                "Release Stage": "n/a",
+            },
+        }
+
+        assessment = server_module._build_ticket_trouble_assessment(
+            ticket=ticket,
+            comments=[],
+            initial_response_sla_minutes=60,
+            high_priority_stale_hours=8,
+        )
+
+        flag_codes = [flag.code for flag in assessment.flags]
+        self.assertIn("internal_tag_title_mismatch", flag_codes)
+        self.assertTrue(any("possible system tagging/title-sync issue" in flag.message for flag in assessment.flags))
+
+    def test_internal_tag_with_internal_in_title_is_not_flagged(self) -> None:
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        ticket = {
+            "id": 909,
+            "subject": "Internal | ACME | iOS | Login issue",
+            "status": "open",
+            "priority": "normal",
+            "created_at": "2026-03-05T10:00:00Z",
+            "updated_at": "2026-03-05T10:30:00Z",
+            "requester_id": 1001,
+            "tags": ["internal"],
+            "custom_fields": {
+                "Status With": "support",
+                "Support Stage": "investigation",
+                "Release Stage": "n/a",
+            },
+        }
+
+        assessment = server_module._build_ticket_trouble_assessment(
+            ticket=ticket,
+            comments=[],
+            initial_response_sla_minutes=60,
+            high_priority_stale_hours=8,
+        )
+
+        flag_codes = [flag.code for flag in assessment.flags]
+        self.assertNotIn("internal_tag_title_mismatch", flag_codes)
+
     def test_ticket_with_live_appstore_end_user_impact_is_flagged_as_production_issue(self) -> None:
         with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
             server_module = importlib.import_module("zendesk_mcp_server.server")
@@ -2193,6 +2333,55 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
         self.assertTrue(
             any(
                 flag.code == "ticket_report_request" and "ticket report" in flag.message.lower()
+                for flag in assessment.flags
+            )
+        )
+
+    def test_customer_urgency_language_is_highlighted(self) -> None:
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        ticket = {
+            "id": 42468,
+            "subject": "ACME | Android | Login issue",
+            "description": "Customer says this is urgent and needs attention ASAP.",
+            "status": "open",
+            "priority": "normal",
+            "created_at": "2026-03-11T14:58:42Z",
+            "updated_at": "2026-03-11T16:14:20Z",
+            "requester_id": 1001,
+            "assignee_id": 2002,
+            "tags": [],
+            "custom_fields": {
+                "Status With": "support",
+                "Support Stage": "Acknowledged",
+                "Release Stage": "PROD",
+                "Support Class": "Support",
+            },
+        }
+        comments = [
+            {
+                "author_id": 1001,
+                "public": True,
+                "body": "This is a high priority issue for us. Please treat it as urgent.",
+                "html_body": "<p>This is a high priority issue for us. Please treat it as urgent.</p>",
+                "created_at": "2026-03-11T15:02:00Z",
+                "attachments": [],
+            }
+        ]
+
+        assessment = server_module._build_ticket_trouble_assessment(
+            ticket=ticket,
+            comments=comments,
+            initial_response_sla_minutes=60,
+            high_priority_stale_hours=8,
+        )
+
+        flag_codes = [flag.code for flag in assessment.flags]
+        self.assertIn("customer_urgency", flag_codes)
+        self.assertTrue(
+            any(
+                flag.code == "customer_urgency" and "urgent" in flag.message.lower()
                 for flag in assessment.flags
             )
         )
