@@ -1111,7 +1111,7 @@ def _classify_crash_attachment(file_name: str | None, content_type: str | None) 
 
     if _is_stacktrace_attachment_filename(lowered_name):
         return "stacktrace"
-    if is_video:
+    if is_video and has_crash_keyword:
         return "replication_video"
     if lowered_name.endswith(".log") and has_crash_keyword:
         return "crash_log"
@@ -1130,7 +1130,14 @@ def _comment_source(comment: dict[str, Any], requester_id: int | None) -> str:
     return "agent_public_comment"
 
 
-def _build_crash_attachment_summary(comments: list[dict[str, Any]], requester_id: int | None) -> CrashAttachmentSummary:
+def _build_crash_attachment_summary(
+    comments: list[dict[str, Any]],
+    requester_id: int | None,
+    enabled: bool = True,
+) -> CrashAttachmentSummary:
+    if not enabled:
+        return CrashAttachmentSummary()
+
     signals: list[CrashAttachmentSignal] = []
     stacktrace_files: list[str] = []
     replication_videos: list[str] = []
@@ -1204,10 +1211,6 @@ def _has_internal_first_comment(comments: list[dict[str, Any]]) -> bool:
     return not bool(first_comment.get("public"))
 
 
-def _mentions_crash_in_ticket_text(subject: str | None, description: str | None) -> bool:
-    return _contains_any(subject, CRASH_SIGNAL_TERMS) or _contains_any(description, CRASH_SIGNAL_TERMS)
-
-
 def _is_escalated_ticket(ticket: dict[str, Any]) -> bool:
     escalation_display = ticket.get("escalation_status_display")
     escalation_tag = ticket.get("escalation_status_tag")
@@ -1247,45 +1250,18 @@ def _build_ticket_trouble_assessment(
     production_impact = _build_production_impact_assessment(ticket=ticket, comments=comments)
 
     public_comments = [c for c in comments if c.get("public")]
-    crash_attachment_summary = _build_crash_attachment_summary(comments=comments, requester_id=requester_id)
+    crash_tag_reviewed = "crash_reviewed" in tags
+    is_unreviewed_crash_ticket = "crash_detected" in tags and not crash_tag_reviewed
+    crash_attachment_summary = _build_crash_attachment_summary(
+        comments=comments,
+        requester_id=requester_id,
+        enabled=is_unreviewed_crash_ticket,
+    )
     public_comments_sorted = sorted(
         public_comments,
         key=lambda c: _parse_iso_datetime(c.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc),
     )
     has_internal_first_comment = _has_internal_first_comment(comments)
-
-    crash_tag_reviewed = "crash_reviewed" in tags
-    attachment_evidence_files = []
-    if crash_attachment_summary.has_crash_related_attachments:
-        attachment_evidence_files = crash_attachment_summary.stacktrace_files or crash_attachment_summary.crash_related_files
-
-    has_crash_or_anr_tag = bool({"crash_detected", "anr_yes"} & tags)
-
-    if not has_crash_or_anr_tag and not crash_tag_reviewed and attachment_evidence_files:
-        evidence_count = len(attachment_evidence_files)
-        evidence_kind = "attachments" if evidence_count != 1 else "attachment"
-        flags.append(
-            TicketTroubleFlag(
-                code="crash_tag_missing_unreviewed_attachment_evidence",
-                severity="high",
-                message=(
-                    f"Crash indicated by {evidence_count} {evidence_kind} "
-                    f"({', '.join(attachment_evidence_files[:3])}), but missing required "
-                    "'crash_detected'/'anr_yes' tag and no 'crash_reviewed' override."
-                ),
-            )
-        )
-    elif not has_crash_or_anr_tag and not crash_tag_reviewed and _mentions_crash_in_ticket_text(subject, description):
-        flags.append(
-            TicketTroubleFlag(
-                code="crash_tag_missing",
-                severity="high",
-                message=(
-                    "Ticket subject/description indicates a crash, but missing required "
-                    "'crash_detected' or 'anr_yes' tag."
-                ),
-            )
-        )
 
     if not _is_title_structured(subject):
         flags.append(
@@ -1478,7 +1454,7 @@ def _build_ticket_trouble_assessment(
                 )
             )
 
-    if has_crash_or_anr_tag:
+    if is_unreviewed_crash_ticket:
         evidence_terms = ["stacktrace", "stack trace", "backtrace", "crash log", "exception"]
         request_terms = ["send stacktrace", "share stacktrace", "provide stacktrace", "crash log", "stack trace"]
 
@@ -1813,12 +1789,16 @@ def review_ticket(
         ticket["merged_from_ticket_id"] = ticket_id
     ticket.update(_build_tom_tovar_comment_metadata(comments))
     ticket["production_impact"] = _build_production_impact_assessment(ticket=ticket, comments=comments).model_dump()
-    attachment_summary = _build_crash_attachment_summary(comments=comments, requester_id=ticket.get("requester_id"))
+    ticket_tags = set(ticket.get("tags") or [])
     return build_ticket_analysis_input(
         ticket_id=resolved_ticket_id,
         ticket=ticket,
         comments=comments,
-        attachment_evidence_summary=attachment_summary.model_dump(),
+        attachment_evidence_summary=_build_crash_attachment_summary(
+            comments=comments,
+            requester_id=ticket.get("requester_id"),
+            enabled="crash_detected" in ticket_tags and "crash_reviewed" not in ticket_tags,
+        ).model_dump(),
         rubric=TICKET_ANALYSIS_TEMPLATE.format(ticket_id=resolved_ticket_id, ticket_link=_ticket_link(resolved_ticket_id)),
     )
 
@@ -2161,6 +2141,8 @@ def review_random_solved_tickets_for_agent(
                 "attachment_evidence_summary": _build_crash_attachment_summary(
                     comments=comments,
                     requester_id=ticket.get("requester_id"),
+                    enabled="crash_detected" in set(ticket.get("tags") or [])
+                    and "crash_reviewed" not in set(ticket.get("tags") or []),
                 ).model_dump(),
             }
         )

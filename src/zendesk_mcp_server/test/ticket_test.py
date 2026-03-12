@@ -2102,7 +2102,7 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
         self.assertTrue(assessment.crash_attachment_summary.has_stacktrace_attachment)
         self.assertIn("ios_stack_capture.bin", assessment.crash_attachment_summary.stacktrace_files)
 
-    def test_ticket_with_crash_attachment_evidence_missing_crash_tag_scores_100(self) -> None:
+    def test_ticket_without_crash_detected_tag_ignores_crash_named_attachments(self) -> None:
         with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
             server_module = importlib.import_module("zendesk_mcp_server.server")
 
@@ -2144,8 +2144,9 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
         )
 
         flag_codes = [flag.code for flag in assessment.flags]
-        self.assertIn("crash_tag_missing_unreviewed_attachment_evidence", flag_codes)
-        self.assertEqual(assessment.risk_score, 100)
+        self.assertNotIn("crash_tag_missing_unreviewed_attachment_evidence", flag_codes)
+        self.assertNotIn("crash_tag_missing", flag_codes)
+        self.assertFalse(assessment.crash_attachment_summary.has_crash_related_attachments)
 
     def test_ticket_with_crash_attachment_evidence_and_crash_reviewed_tag_does_not_flag_missing_crash_tag(self) -> None:
         with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
@@ -2188,7 +2189,7 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
         self.assertNotIn("crash_tag_missing_unreviewed_attachment_evidence", flag_codes)
         self.assertNotIn("crash_tag_missing", flag_codes)
 
-    def test_ticket_with_crash_subject_and_missing_crash_tag_is_high_alert(self) -> None:
+    def test_ticket_without_crash_detected_tag_does_not_flag_crash_subject(self) -> None:
         with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
             server_module = importlib.import_module("zendesk_mcp_server.server")
 
@@ -2227,9 +2228,9 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
         )
 
         flag_codes = [flag.code for flag in assessment.flags]
-        self.assertIn("crash_tag_missing", flag_codes)
+        self.assertNotIn("crash_tag_missing", flag_codes)
 
-    def test_ticket_with_crash_description_and_missing_crash_tag_is_high_alert(self) -> None:
+    def test_ticket_without_crash_detected_tag_does_not_flag_crash_description(self) -> None:
         with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
             server_module = importlib.import_module("zendesk_mcp_server.server")
 
@@ -2268,9 +2269,9 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
         )
 
         flag_codes = [flag.code for flag in assessment.flags]
-        self.assertIn("crash_tag_missing", flag_codes)
+        self.assertNotIn("crash_tag_missing", flag_codes)
 
-    def test_get_ticket_summary_includes_crash_tag_missing_alert(self) -> None:
+    def test_get_ticket_summary_does_not_infer_crash_without_crash_detected_tag(self) -> None:
         request = CallToolRequest(
             method="tools/call",
             params=CallToolRequestParams(
@@ -2321,8 +2322,9 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
 
         summary_text = response.root.content[0].text
         self.assertIn("## Trouble Scan", summary_text)
-        self.assertIn("crash_tag_missing", summary_text)
         self.assertIn("Crash-related attachments available:", summary_text)
+        self.assertIn("Crash-related attachments available: No", summary_text)
+        self.assertNotIn("crash_tag_missing", summary_text)
         self.assertFalse(response.root.isError)
 
     def test_get_ticket_summary_explains_non_escalated_priority_handling(self) -> None:
@@ -2572,7 +2574,7 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
         self.assertEqual(mock_prepare_ticket_payload.call_count, 2)
         self.assertFalse(response.root.isError)
 
-    def test_crash_ticket_non_matching_attachment_filename_still_flags_process_gap(self) -> None:
+    def test_crash_ticket_generic_video_attachment_does_not_count_as_crash_evidence(self) -> None:
         with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
             server_module = importlib.import_module("zendesk_mcp_server.server")
 
@@ -2612,8 +2614,51 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
         flag_codes = [flag.code for flag in assessment.flags]
         self.assertIn("crash_process_gap", flag_codes)
         self.assertIsNotNone(assessment.crash_attachment_summary)
+        self.assertFalse(assessment.crash_attachment_summary.has_crash_related_attachments)
+        self.assertFalse(assessment.crash_attachment_summary.has_replication_video)
+        self.assertEqual(assessment.crash_attachment_summary.replication_videos, [])
+
+    def test_crash_ticket_video_with_crash_filename_counts_as_replication_evidence(self) -> None:
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        ticket = {
+            "id": 9914,
+            "subject": "ACME | Android | Crash after login",
+            "status": "open",
+            "priority": "high",
+            "created_at": "2026-03-05T10:00:00Z",
+            "updated_at": "2026-03-05T10:30:00Z",
+            "requester_id": 1001,
+            "tags": ["crash_detected"],
+            "custom_fields": {
+                "Status With": "support",
+                "Support Stage": "investigation",
+                "Release Stage": "n/a",
+            },
+        }
+        comments = [
+            {
+                "author_id": 2002,
+                "public": True,
+                "body": "Attached crash reproduction video.",
+                "html_body": "<p>Attached crash reproduction video.</p>",
+                "created_at": "2026-03-05T10:05:00Z",
+                "attachments": [{"file_name": "android_crash_repro.mp4"}],
+            }
+        ]
+
+        assessment = server_module._build_ticket_trouble_assessment(
+            ticket=ticket,
+            comments=comments,
+            initial_response_sla_minutes=60,
+            high_priority_stale_hours=8,
+        )
+
+        self.assertIsNotNone(assessment.crash_attachment_summary)
+        self.assertTrue(assessment.crash_attachment_summary.has_crash_related_attachments)
         self.assertTrue(assessment.crash_attachment_summary.has_replication_video)
-        self.assertIn("screen_recording.mp4", assessment.crash_attachment_summary.replication_videos)
+        self.assertIn("android_crash_repro.mp4", assessment.crash_attachment_summary.replication_videos)
 
     def test_crash_ticket_generic_image_attachment_does_not_count_as_crash_evidence(self) -> None:
         with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
