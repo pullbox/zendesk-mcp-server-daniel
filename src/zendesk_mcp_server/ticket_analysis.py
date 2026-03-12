@@ -10,7 +10,7 @@ TIMESTAMP_FIELD_NAMES = {
     "timestamp",
 }
 ATTRIBUTION_GUARDRAILS = """
-Attribution guardrails:
+Evidence rules:
 - Do not infer ownership, handoff, authorship, approval, escalation leadership, or decision-making unless the record explicitly states it.
 - Do not treat a person's presence in comments, internal notes, meetings, customer calls, CC fields, or nearby text as evidence that they owned or drove the work.
 - Describe observed actions literally and do not upgrade participation into ownership or responsibility.
