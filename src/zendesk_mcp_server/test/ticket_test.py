@@ -2386,6 +2386,63 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
             )
         )
 
+    def test_customer_urgency_fast_track_go_live_language_is_highlighted(self) -> None:
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        ticket = {
+            "id": 41904,
+            "subject": "ACME | iOS | Release assistance",
+            "description": "Customer is asking for release support.",
+            "status": "open",
+            "priority": "normal",
+            "created_at": "2026-03-11T14:58:42Z",
+            "updated_at": "2026-03-11T16:14:20Z",
+            "requester_id": 1001,
+            "assignee_id": 2002,
+            "tags": [],
+            "custom_fields": {
+                "Status With": "support",
+                "Support Stage": "Acknowledged",
+                "Release Stage": "PROD",
+                "Support Class": "Support",
+            },
+        }
+        comments = [
+            {
+                "author_id": 1001,
+                "public": True,
+                "body": (
+                    "Hello Team,\n\n"
+                    "We are scheduled to go live tomorrow. Can you assist in fast-tracking this?\n\n"
+                    "Kind Regards"
+                ),
+                "html_body": (
+                    "<p>Hello Team,</p><p>We are scheduled to go live tomorrow. "
+                    "Can you assist in fast-tracking this?</p><p>Kind Regards</p>"
+                ),
+                "created_at": "2026-03-11T15:02:00Z",
+                "attachments": [],
+            }
+        ]
+
+        assessment = server_module._build_ticket_trouble_assessment(
+            ticket=ticket,
+            comments=comments,
+            initial_response_sla_minutes=60,
+            high_priority_stale_hours=8,
+        )
+
+        flag_codes = [flag.code for flag in assessment.flags]
+        self.assertIn("customer_urgency", flag_codes)
+        self.assertTrue(
+            any(
+                flag.code == "customer_urgency"
+                and ("fast-track" in flag.message.lower() or "go live" in flag.message.lower())
+                for flag in assessment.flags
+            )
+        )
+
     def test_crash_ticket_attachment_filename_keyword_counts_as_stacktrace_evidence(self) -> None:
         with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
             server_module = importlib.import_module("zendesk_mcp_server.server")

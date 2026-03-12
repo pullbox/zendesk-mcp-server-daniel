@@ -699,6 +699,15 @@ CUSTOMER_URGENCY_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bimmediate(?:ly)?\b", re.IGNORECASE),
     re.compile(r"\btime[- ]sensitive\b", re.IGNORECASE),
     re.compile(r"\bcritical\b", re.IGNORECASE),
+    re.compile(r"\bfast[- ]?track(?:ing|ed)?\b", re.IGNORECASE),
+    re.compile(
+        r"\b(?:go[- ]?live|launch(?:ing|es|ed)?)\b.{0,24}\b(?:today|tomorrow)\b",
+        re.IGNORECASE | re.DOTALL,
+    ),
+    re.compile(
+        r"\b(?:today|tomorrow)\b.{0,24}\b(?:go[- ]?live|launch(?:ing|es|ed)?)\b",
+        re.IGNORECASE | re.DOTALL,
+    ),
 )
 UNHAPPY_COMMENT_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bnot\s+happy\b", re.IGNORECASE),
