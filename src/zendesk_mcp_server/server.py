@@ -518,6 +518,7 @@ TROUBLE_FLAG_WEIGHTS: dict[str, int] = {
     "crash_process_gap": 45,
     "crash_tag_missing": 50,
     "customer_unhappy": 40,
+    "ticket_report_request": 32,
     "meeting_summary_missing": 28,
     "status_fields_incomplete": 24,
     "customer_comment_no_response": 30,
@@ -662,6 +663,16 @@ TRAINING_REQUEST_SIGNAL_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\breview\b", re.IGNORECASE),
     re.compile(r"\btelemetry\b", re.IGNORECASE),
 )
+TICKET_REPORT_REQUEST_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\bticket\s+report\b", re.IGNORECASE),
+    re.compile(r"\breport\s+of\s+tickets\b", re.IGNORECASE),
+    re.compile(r"\breport\s+for\s+tickets\b", re.IGNORECASE),
+    re.compile(r"\breport\s+about\s+tickets\b", re.IGNORECASE),
+    re.compile(r"\breporte\s+de\s+tickets\b", re.IGNORECASE),
+    re.compile(r"\binforme\s+de\s+tickets\b", re.IGNORECASE),
+    re.compile(r"\bzendesk\s+ticket\s+report\b", re.IGNORECASE),
+    re.compile(r"\breporte\s+de\s+tickets\s+de\s+zendesk\b", re.IGNORECASE),
+)
 UNHAPPY_COMMENT_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bnot\s+happy\b", re.IGNORECASE),
     re.compile(r"\bunhappy\b", re.IGNORECASE),
@@ -746,6 +757,55 @@ def _build_customer_unhappy_flag(
                     f"Evidence: '{match.group(0)}' in {source} at {created_at}."
                 ),
             )
+    return None
+
+
+def _build_ticket_report_request_flag(
+    ticket: dict[str, Any],
+    comments: list[dict[str, Any]],
+    requester_id: int | None,
+) -> TicketTroubleFlag | None:
+    subject = str(ticket.get("subject") or "")
+    description = str(ticket.get("description") or "")
+
+    for field_name, text in (("subject", subject), ("description", description)):
+        for pattern in TICKET_REPORT_REQUEST_PATTERNS:
+            match = pattern.search(text)
+            if not match:
+                continue
+            return TicketTroubleFlag(
+                code="ticket_report_request",
+                severity="medium",
+                message=(
+                    "Ticket includes an explicit Zendesk ticket-report request; treat this as an elevated-attention "
+                    f"signal. Evidence: '{match.group(0)}' in ticket {field_name}."
+                ),
+            )
+
+    for comment in sorted(
+        comments,
+        key=lambda c: _parse_iso_datetime(c.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc),
+        reverse=True,
+    ):
+        if requester_id is not None and comment.get("author_id") != requester_id:
+            continue
+        text = _comment_text(comment)
+        if not text:
+            continue
+        for pattern in TICKET_REPORT_REQUEST_PATTERNS:
+            match = pattern.search(text)
+            if not match:
+                continue
+            created_at = comment.get("created_at") or "unknown time"
+            return TicketTroubleFlag(
+                code="ticket_report_request",
+                severity="medium",
+                message=(
+                    "Customer requested a Zendesk ticket report; treat this as an elevated-attention signal. "
+                    f"Evidence: '{match.group(0)}' in customer_public_comment at {created_at}."
+                ),
+            )
+
     return None
 
 
@@ -1288,6 +1348,14 @@ def _build_ticket_trouble_assessment(
     unhappy_comment_flag = _build_customer_unhappy_flag(comments=comments, requester_id=requester_id)
     if unhappy_comment_flag is not None:
         flags.append(unhappy_comment_flag)
+
+    ticket_report_request_flag = _build_ticket_report_request_flag(
+        ticket=ticket,
+        comments=comments,
+        requester_id=requester_id,
+    )
+    if ticket_report_request_flag is not None:
+        flags.append(ticket_report_request_flag)
 
     required_status_fields = ["Status With", "Support Stage", "Release Stage"]
     missing_status_fields = [field for field in required_status_fields if not custom_fields.get(field)]

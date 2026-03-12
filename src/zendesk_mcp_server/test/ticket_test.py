@@ -2057,6 +2057,56 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
         self.assertFalse(assessment.production_impact.is_production_issue)
         self.assertNotIn("production_user_impact", flag_codes)
         self.assertLess(assessment.risk_score, 100)
+        self.assertNotIn("ticket_report_request", flag_codes)
+
+    def test_customer_ticket_report_request_is_highlighted(self) -> None:
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        ticket = {
+            "id": 42802,
+            "subject": "ACME | Support | Request for Zendesk ticket report",
+            "description": "Customer asked for a report of tickets from Zendesk.",
+            "status": "open",
+            "priority": "normal",
+            "created_at": "2026-03-11T14:58:42Z",
+            "updated_at": "2026-03-11T16:14:20Z",
+            "requester_id": 1001,
+            "assignee_id": 2002,
+            "tags": [],
+            "custom_fields": {
+                "Status With": "support",
+                "Support Stage": "Acknowledged",
+                "Release Stage": "PROD",
+                "Support Class": "Support",
+            },
+        }
+        comments = [
+            {
+                "author_id": 1001,
+                "public": True,
+                "body": "Please send me a Zendesk ticket report with all related tickets for this account.",
+                "html_body": "<p>Please send me a Zendesk ticket report with all related tickets for this account.</p>",
+                "created_at": "2026-03-11T14:58:42Z",
+                "attachments": [],
+            }
+        ]
+
+        assessment = server_module._build_ticket_trouble_assessment(
+            ticket=ticket,
+            comments=comments,
+            initial_response_sla_minutes=60,
+            high_priority_stale_hours=8,
+        )
+
+        flag_codes = [flag.code for flag in assessment.flags]
+        self.assertIn("ticket_report_request", flag_codes)
+        self.assertTrue(
+            any(
+                flag.code == "ticket_report_request" and "ticket report" in flag.message.lower()
+                for flag in assessment.flags
+            )
+        )
 
     def test_crash_ticket_attachment_filename_keyword_counts_as_stacktrace_evidence(self) -> None:
         with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
