@@ -80,6 +80,16 @@ To use the Dockerized server from Claude Code/Desktop, add an entry to Claude Co
 
 Adjust the paths to match your environment. After saving the file, restart Claude for the new MCP server to be detected.
 
+#### Custom Handler Mappings In Claude
+
+If you want Claude to treat a phrase like `triage` as a direct instruction to run a specific MCP tool, the most reliable approach is to define that mapping in Claude's system prompt or user preferences.
+
+Example instruction:
+
+> "When I say triage, always call the `zendesk:scan_tickets_in_trouble` MCP tool. Do not interpret it as a general concept; treat it as a direct command to invoke that handler."
+
+For personal use, the simplest place to add this is in Claude.ai under `Settings -> Profile -> User Preferences`, so the mapping applies across all of your conversations.
+
 ## Resources
 
 - `zendesk://knowledge-base`
