@@ -511,6 +511,7 @@ class ScanTicketsInTroubleResult(BaseModel):
 
 DEFAULT_INITIAL_RESPONSE_SLA_MINUTES = 60
 DEFAULT_HIGH_PRIORITY_STALE_HOURS = 8
+PENDING_TICKET_PRIORITY_DISCOUNT = 15
 
 TROUBLE_FLAG_WEIGHTS: dict[str, int] = {
     "crash_tag_missing_unreviewed_attachment_evidence": 100,
@@ -1344,6 +1345,18 @@ def _is_title_structured(subject: str | None) -> bool:
     return len(segments) >= 3
 
 
+def _is_feature_request_ticket(subject: str | None) -> bool:
+    if not subject:
+        return False
+    return subject.startswith("Feature Request - ")
+
+
+def _adjust_trouble_risk_score(status: str | None, base_risk_score: int) -> int:
+    if str(status or "").strip().lower() == "pending":
+        return max(0, base_risk_score - PENDING_TICKET_PRIORITY_DISCOUNT)
+    return base_risk_score
+
+
 def _has_internal_tag_title_mismatch(ticket: dict[str, Any]) -> bool:
     tags = {str(tag).strip().lower() for tag in (ticket.get("tags") or [])}
     if "internal" not in tags:
@@ -1717,13 +1730,14 @@ def _build_ticket_trouble_assessment(
             flag.code,
         ),
     )
-    risk_score = min(
+    base_risk_score = min(
         100,
         sum(
             TROUBLE_FLAG_WEIGHTS.get(flag.code, SEVERITY_FALLBACK_WEIGHTS.get(flag.severity, 5))
             for flag in sorted_flags
         ),
     )
+    risk_score = _adjust_trouble_risk_score(status=status, base_risk_score=base_risk_score)
     tom_tovar_comment_metadata = _build_tom_tovar_comment_metadata(comments)
 
     return TicketTroubleAssessment(
@@ -1737,7 +1751,12 @@ def _build_ticket_trouble_assessment(
         priority_interpretation=(
             "Escalated ticket: Zendesk priority mirrors ENG priority."
             if is_escalated
-            else "Non-escalated ticket: Zendesk priority is not treated as severity; use flags and risk score."
+            else (
+                "Pending ticket: lower priority by default because a solution was communicated and customer "
+                "confirmation is still pending before solve."
+                if str(status or "").strip().lower() == "pending"
+                else "Non-escalated ticket: Zendesk priority is not treated as severity; use flags and risk score."
+            )
         ),
         in_trouble=bool(sorted_flags),
         risk_score=risk_score,
@@ -2135,11 +2154,15 @@ def scan_tickets_in_trouble(
     for ticket in list_result.get("tickets", []):
         if str(ticket.get("status", "")).lower() in {"solved", "closed"}:
             continue
+        if _is_feature_request_ticket(ticket.get("subject")):
+            continue
         ticket_id = ticket.get("id")
         if ticket_id is None:
             continue
         full_ticket = _prepare_ticket_payload(int(ticket_id))
         if str(full_ticket.get("status", "")).lower() in {"solved", "closed"}:
+            continue
+        if _is_feature_request_ticket(full_ticket.get("subject")):
             continue
         comments = zendesk_client.get_ticket_comments(int(ticket_id))
         assessment = _build_ticket_trouble_assessment(

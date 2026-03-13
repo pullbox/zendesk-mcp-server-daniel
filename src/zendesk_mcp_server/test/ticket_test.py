@@ -723,6 +723,57 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
         mock_client.get_ticket_comments.assert_not_called()
         self.assertFalse(response.root.isError)
 
+    def test_scan_tickets_in_trouble_ignores_feature_request_titles(self) -> None:
+        list_payload = {
+            "tickets": [
+                {
+                    "id": 780,
+                    "subject": "Feature Request - Bulk export for dashboard",
+                    "status": "open",
+                    "priority": "high",
+                },
+            ],
+            "count": 1,
+            "page": 1,
+            "per_page": 25,
+            "sort_by": "created_at",
+            "sort_order": "desc",
+            "filters": {
+                "created_last_hours": 4,
+                "exclude_internal": True,
+            },
+            "has_more": False,
+            "next_page": None,
+            "previous_page": None,
+        }
+        request = CallToolRequest(
+            method="tools/call",
+            params=CallToolRequestParams(
+                name="scan_tickets_in_trouble",
+                arguments={"created_last_hours": 4, "per_page": 25},
+            ),
+        )
+
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        with (
+            patch.object(server_module, "zendesk_client") as mock_client,
+            patch.object(server_module, "_prepare_ticket_payload") as mock_prepare_ticket_payload,
+        ):
+            mock_client.get_tickets.return_value = list_payload
+
+            handler = server_module.mcp._mcp_server.request_handlers[CallToolRequest]
+            response = asyncio.run(handler(request))
+
+        structured = response.root.structuredContent
+        self.assertEqual(structured["scanned_count"], 0)
+        self.assertEqual(structured["in_trouble_count"], 0)
+        self.assertEqual(structured["tickets"], [])
+        mock_prepare_ticket_payload.assert_not_called()
+        mock_client.get_ticket_comments.assert_not_called()
+        self.assertFalse(response.root.isError)
+
     def test_scan_tickets_in_trouble_orders_tickets_by_weighted_risk(self) -> None:
         list_payload = {
             "tickets": [
@@ -815,6 +866,47 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
         self.assertGreater(structured["tickets"][0]["risk_score"], structured["tickets"][1]["risk_score"])
         self.assertEqual(structured["tickets"][0]["flags"][0]["code"], "missing_initial_response")
         self.assertFalse(response.root.isError)
+
+    def test_pending_tickets_are_deprioritized_in_trouble_score(self) -> None:
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        open_ticket = {
+            "id": 920,
+            "subject": "ACME | Android | Crash after login",
+            "status": "open",
+            "priority": "normal",
+            "created_at": "2026-03-05T10:00:00Z",
+            "updated_at": "2026-03-05T20:30:00Z",
+            "requester_id": 1001,
+            "tags": [],
+            "custom_fields": {
+                "Status With": "customer",
+                "Support Stage": "investigation",
+                "Release Stage": "PROD",
+            },
+        }
+        pending_ticket = {
+            **open_ticket,
+            "id": 921,
+            "status": "pending",
+        }
+
+        open_assessment = server_module._build_ticket_trouble_assessment(
+            ticket=open_ticket,
+            comments=[],
+            initial_response_sla_minutes=60,
+            high_priority_stale_hours=8,
+        )
+        pending_assessment = server_module._build_ticket_trouble_assessment(
+            ticket=pending_ticket,
+            comments=[],
+            initial_response_sla_minutes=60,
+            high_priority_stale_hours=8,
+        )
+
+        self.assertGreater(open_assessment.risk_score, pending_assessment.risk_score)
+        self.assertIn("Pending ticket: lower priority by default", pending_assessment.priority_interpretation)
 
     def test_scan_tickets_in_trouble_includes_markdown_ticket_list(self) -> None:
         list_payload = {
