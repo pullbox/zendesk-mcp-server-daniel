@@ -774,6 +774,57 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
         mock_client.get_ticket_comments.assert_not_called()
         self.assertFalse(response.root.isError)
 
+    def test_scan_tickets_in_trouble_ignores_titles_containing_feature_request_words(self) -> None:
+        list_payload = {
+            "tickets": [
+                {
+                    "id": 781,
+                    "subject": "ACME | Android | Feature Request for dashboard export",
+                    "status": "open",
+                    "priority": "high",
+                },
+            ],
+            "count": 1,
+            "page": 1,
+            "per_page": 25,
+            "sort_by": "created_at",
+            "sort_order": "desc",
+            "filters": {
+                "created_last_hours": 4,
+                "exclude_internal": True,
+            },
+            "has_more": False,
+            "next_page": None,
+            "previous_page": None,
+        }
+        request = CallToolRequest(
+            method="tools/call",
+            params=CallToolRequestParams(
+                name="scan_tickets_in_trouble",
+                arguments={"created_last_hours": 4, "per_page": 25},
+            ),
+        )
+
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        with (
+            patch.object(server_module, "zendesk_client") as mock_client,
+            patch.object(server_module, "_prepare_ticket_payload") as mock_prepare_ticket_payload,
+        ):
+            mock_client.get_tickets.return_value = list_payload
+
+            handler = server_module.mcp._mcp_server.request_handlers[CallToolRequest]
+            response = asyncio.run(handler(request))
+
+        structured = response.root.structuredContent
+        self.assertEqual(structured["scanned_count"], 0)
+        self.assertEqual(structured["in_trouble_count"], 0)
+        self.assertEqual(structured["tickets"], [])
+        mock_prepare_ticket_payload.assert_not_called()
+        mock_client.get_ticket_comments.assert_not_called()
+        self.assertFalse(response.root.isError)
+
     def test_scan_tickets_in_trouble_orders_tickets_by_weighted_risk(self) -> None:
         list_payload = {
             "tickets": [
@@ -2039,6 +2090,153 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
             "Escalated ticket: Zendesk priority mirrors ENG priority.",
         )
 
+    def test_sev1_ticket_waiting_for_customer_data_is_flagged_after_one_hour(self) -> None:
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        ticket = {
+            "id": 9061,
+            "subject": "ACME | Android | Crash on launch",
+            "status": "open",
+            "priority": "urgent",
+            "created_at": "2026-03-05T10:00:00Z",
+            "updated_at": "2026-03-05T12:20:00Z",
+            "requester_id": 1001,
+            "tags": [],
+            "custom_fields": {
+                "Status With": "Customer",
+                "Support Stage": "investigation",
+                "Release Stage": "production",
+                "Escalation Status": "Eng Escalated",
+                "Priority": "SEV 1",
+            },
+        }
+        comments = [
+            {
+                "author_id": 2002,
+                "public": True,
+                "body": "Please provide the crash logs and a screen recording so we can continue.",
+                "html_body": "<p>Please provide the crash logs and a screen recording so we can continue.</p>",
+                "created_at": "2026-03-05T10:45:00Z",
+                "attachments": [],
+            }
+        ]
+
+        assessment = server_module._build_ticket_trouble_assessment(
+            ticket=ticket,
+            comments=comments,
+            initial_response_sla_minutes=60,
+            high_priority_stale_hours=8,
+        )
+
+        flag_codes = [flag.code for flag in assessment.flags]
+        self.assertIn("sev1_customer_data_follow_up_overdue", flag_codes)
+
+    def test_sev1_ticket_without_requested_data_does_not_clear_on_customer_acknowledgement(self) -> None:
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        ticket = {
+            "id": 9062,
+            "subject": "ACME | Android | Crash on launch",
+            "status": "open",
+            "priority": "urgent",
+            "created_at": "2026-03-05T10:00:00Z",
+            "updated_at": "2026-03-05T13:30:00Z",
+            "requester_id": 1001,
+            "tags": [],
+            "custom_fields": {
+                "Status With": "Customer",
+                "Support Stage": "investigation",
+                "Release Stage": "production",
+                "Escalation Status": "Eng Escalated",
+                "Priority": "SEV 1",
+            },
+        }
+        comments = [
+            {
+                "author_id": 2002,
+                "public": True,
+                "body": "Could you please share the device logs and exact app version?",
+                "html_body": "<p>Could you please share the device logs and exact app version?</p>",
+                "created_at": "2026-03-05T10:45:00Z",
+                "attachments": [],
+            },
+            {
+                "author_id": 1001,
+                "public": True,
+                "body": "We are checking with the team and will send that later.",
+                "html_body": "<p>We are checking with the team and will send that later.</p>",
+                "created_at": "2026-03-05T11:50:00Z",
+                "attachments": [],
+            },
+        ]
+
+        assessment = server_module._build_ticket_trouble_assessment(
+            ticket=ticket,
+            comments=comments,
+            initial_response_sla_minutes=60,
+            high_priority_stale_hours=8,
+        )
+
+        flag_codes = [flag.code for flag in assessment.flags]
+        self.assertIn("sev1_customer_data_follow_up_overdue", flag_codes)
+
+    def test_sev1_ticket_clears_hourly_follow_up_once_customer_provides_requested_data(self) -> None:
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        ticket = {
+            "id": 9063,
+            "subject": "ACME | Android | Crash on launch",
+            "status": "open",
+            "priority": "urgent",
+            "created_at": "2026-03-05T10:00:00Z",
+            "updated_at": "2026-03-05T12:10:00Z",
+            "requester_id": 1001,
+            "tags": [],
+            "custom_fields": {
+                "Status With": "Customer",
+                "Support Stage": "investigation",
+                "Release Stage": "production",
+                "Escalation Status": "Eng Escalated",
+                "Priority": "SEV 1",
+            },
+        }
+        comments = [
+            {
+                "author_id": 2002,
+                "public": True,
+                "body": "Please send the crash logs and steps to reproduce.",
+                "html_body": "<p>Please send the crash logs and steps to reproduce.</p>",
+                "created_at": "2026-03-05T10:45:00Z",
+                "attachments": [],
+            },
+            {
+                "author_id": 1001,
+                "public": True,
+                "body": "Attached are the crash logs from the affected device.",
+                "html_body": "<p>Attached are the crash logs from the affected device.</p>",
+                "created_at": "2026-03-05T11:15:00Z",
+                "attachments": [
+                    {
+                        "file_name": "device-crash.log",
+                        "content_type": "text/plain",
+                    }
+                ],
+            },
+        ]
+
+        assessment = server_module._build_ticket_trouble_assessment(
+            ticket=ticket,
+            comments=comments,
+            initial_response_sla_minutes=60,
+            high_priority_stale_hours=8,
+        )
+
+        flag_codes = [flag.code for flag in assessment.flags]
+        self.assertNotIn("sev1_customer_data_follow_up_overdue", flag_codes)
+
     def test_internal_first_comment_skips_initial_response_flags(self) -> None:
         with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
             server_module = importlib.import_module("zendesk_mcp_server.server")
@@ -2959,6 +3157,67 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
 
         summary_text = response.root.content[0].text
         self.assertIn("| Production Issue | Yes |", summary_text)
+        self.assertFalse(response.root.isError)
+
+    def test_feature_request_ticket_summary_is_low_priority_and_no_risk(self) -> None:
+        request = CallToolRequest(
+            method="tools/call",
+            params=CallToolRequestParams(
+                name="get_ticket_summary",
+                arguments={"ticket_id": 9914},
+            ),
+        )
+
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        ticket_payload = {
+            "id": 9914,
+            "subject": "ACME | iOS | Feature Request for dashboard export",
+            "description": "Customer wants a new export option.",
+            "status": "open",
+            "priority": "high",
+            "created_at": "2026-03-05T10:00:00Z",
+            "updated_at": "2026-03-05T10:10:00Z",
+            "requester_id": 1001,
+            "tags": [],
+            "custom_fields": {
+                "Status With": "customer",
+                "Support Stage": "investigation",
+                "Release Stage": "Production",
+            },
+            "ticket_url": "https://appdomesupport.zendesk.com/agent/tickets/9914",
+            "ticket_link": "[9914](https://appdomesupport.zendesk.com/agent/tickets/9914)",
+        }
+        comments_payload = [
+            {
+                "author_id": 1001,
+                "public": True,
+                "body": "This is a feature request for a future enhancement.",
+                "html_body": "<p>This is a feature request for a future enhancement.</p>",
+                "created_at": "2026-03-05T10:05:00Z",
+                "attachments": [],
+            }
+        ]
+
+        with (
+            patch.object(server_module, "_prepare_ticket_payload", return_value=ticket_payload),
+            patch.object(server_module, "zendesk_client") as mock_client,
+        ):
+            mock_client.get_ticket_comments.return_value = comments_payload
+            handler = server_module.mcp._mcp_server.request_handlers[CallToolRequest]
+            response = asyncio.run(handler(request))
+
+        summary_text = response.root.content[0].text
+        self.assertIn("| Priority | low |", summary_text)
+        self.assertIn("Production Issue: No", summary_text)
+        self.assertIn(
+            "Priority Interpretation: Feature request title detected: treat as low priority with no operational risk.",
+            summary_text,
+        )
+        self.assertIn("In Trouble: No", summary_text)
+        self.assertIn("Risk Score: 0", summary_text)
+        self.assertIn("Flags: none", summary_text)
         self.assertFalse(response.root.isError)
 
     def test_review_ticket_resolves_merged_reference_from_last_comment(self) -> None:

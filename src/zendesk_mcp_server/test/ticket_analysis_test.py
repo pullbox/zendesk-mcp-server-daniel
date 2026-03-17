@@ -124,6 +124,14 @@ class TestTicketAnalysisInput(unittest.TestCase):
         self.assertEqual(payload["reviews"][0]["rubric"], "Review ticket [300](https://example.zendesk.com/agent/tickets/300).")
         self.assertEqual(payload["reviews"][0]["attachment_evidence_summary"], {})
 
+    def test_ticket_analysis_template_uses_ticket_qa_wording(self) -> None:
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+        from zendesk_mcp_server.server import TICKET_ANALYSIS_TEMPLATE
+
+        self.assertIn("ticket QA", TICKET_ANALYSIS_TEMPLATE)
+        self.assertIn("Evaluate the ticket record only, not any employee's overall performance.", TICKET_ANALYSIS_TEMPLATE)
+        self.assertNotIn("Compliance Score", TICKET_ANALYSIS_TEMPLATE)
+
 
 if __name__ == "__main__":
     unittest.main()

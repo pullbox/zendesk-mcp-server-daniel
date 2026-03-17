@@ -270,7 +270,7 @@ Randomly sample solved tickets for a specific agent in a date window.
 
 ### review_random_solved_tickets_for_agent
 
-Samples solved tickets and returns a combined review input packet for all sampled tickets.
+Samples solved tickets and returns a combined ticket-QA input packet for all sampled tickets.
 
 - Input:
   - Same inputs as `sample_solved_tickets_for_agent`

@@ -106,14 +106,14 @@ Instructions:
 """
 
 TICKET_ANALYSIS_TEMPLATE = """
-You are reviewing Zendesk ticket {ticket_link} for internal support QA.
+You are reviewing Zendesk ticket {ticket_link} for ticket QA.
 
 Use only the ticket details and ticket comments as evidence. Do not infer or invent facts that are not explicitly present in the ticket data. If a milestone or detail cannot be found, write "Not found".
 
 Review goals:
-1. Identify whether the support handling appears compliant with internal processes based only on available evidence.
-2. Highlight any gaps, delays, missing confirmations, or unclear ownership transitions.
-3. Summarize what happened in a way that is useful for coaching and follow-up.
+1. Summarize the ticket record and documented handling steps based only on available evidence.
+2. Highlight documented gaps, delays, missing confirmations, or unclear ownership transitions in the ticket record.
+3. Produce a useful ticket-level QA summary for operational follow-up.
 4. Attribute actions, ownership, and escalation leadership only when explicitly supported by the ticket record.
 
 Required output:
@@ -147,44 +147,42 @@ Required output:
    - Latest Tom comment:
    - Tom comment summary:
    Use ticket metadata fields (tom_tovar_*) and comments as evidence.
-6. Process Review
-   List concrete observations about process compliance or non-compliance based on evidence from the ticket and comments.
-7. Compliance Score
-   Give a score from 0 to 100.
-   - 90-100: strong evidence of compliant handling
-   - 70-89: mostly compliant with minor gaps
-   - 40-69: notable process gaps or unclear evidence
-   - 0-39: major process failures or missing critical handling steps
-   Include a short explanation for the score.
+6. Process Findings
+   List concrete ticket-level observations about documented process completeness or gaps based on evidence from the ticket and comments.
+7. Overall QA Summary
+   Give a concise summary of the ticket record quality.
+   Focus on documented strengths, missing evidence, and follow-up items.
 
 Rules:
 - Ticket Title is formated correctly.
 - Escalated Tickets are tickets where the Escalation Status field is populated.
 - Do not use external assumptions or general policy knowledge unless explicitly present in the ticket.
 - Do not treat missing evidence as completed work.
+- Evaluate the ticket record only, not any employee's overall performance.
+- Do not score, rank, or otherwise evaluate a person.
 - Follow the attribution guardrails exactly:
   {attribution_guardrails}
-- Email chain and preamble scope: when a ticket originates from an email chain, use only support interaction evidence (agent public comments, customer replies in-ticket, and internal notes) to evaluate agent behavior.
+- Email chain and preamble scope: when a ticket originates from an email chain, use only support interaction evidence (agent public comments, customer replies in-ticket, and internal notes) to evaluate the ticket record.
 - Do not use email chain preambles, introductory forwarding text, or prior forwarded email history to justify agent handling decisions.
 - Customer context statements in the opening message (for example, "I am writing on behalf of X who is on leave") explain ticket origin only and must not be used to justify or excuse agent delay/timeliness.
 - Delay justification rule: attribute a delay to a specific cause only when that cause is explicitly documented by the agent in their actions or internal notes.
 - Customer-side context in the opening message is not documented delay justification for agent handling.
 - If no explicit agent-documented delay reason exists, assess delay on its face based on the timeline evidence.
-- Evidence source discipline: for each timeline item and compliance observation, explicitly state source and author (for example: agent public comment, customer reply, internal note, email chain preamble).
-- Do not mix evidence sources when drawing compliance conclusions; customer context about their own situation cannot be used to evaluate or excuse agent actions.
+- Evidence source discipline: for each timeline item and process finding, explicitly state source and author (for example: agent public comment, customer reply, internal note, email chain preamble).
+- Do not mix evidence sources when drawing ticket QA conclusions; customer context about their own situation cannot be used to evaluate or excuse agent actions.
 - For Escalated Tickets, if the customer has not explicitly confirmed the solution worked, do not mark the resolution as customer-acknowledged.
 - Crash/ANR ticket rule: if the ticket has tag "crash_detected" or "anr_yes", verify crash/ANR evidence handling.
 - For crash_detected/anr_yes tickets, treat stacktrace evidence as present only when there is explicit stacktrace content in comments or a relevant crash attachment (for example .ips, .crash, .dmp, or filenames that explicitly indicate a crash log/stacktrace).
 - If a crash_detected/anr_yes ticket has no stacktrace evidence, verify the assigned support engineer asked the customer for stacktrace/crash log details. If no such request appears in comments, flag this as a process gap.
 - For crash_detected/anr_yes tickets, enforce stacktrace request timeliness: if stacktrace evidence is not already present, the first explicit support request for stacktrace/crash logs should occur within 1 hour of crash identification.
 - For this check, infer crash identification time from the earliest explicit crash evidence in the ticket/comments; if the ticket already has tag "crash_detected" or "anr_yes", use ticket created timestamp when no earlier signal is available.
-- If the first stacktrace request is more than 1 hour after crash identification, explicitly flag "Late stacktrace request (>1h)" in Process Review.
+- If the first stacktrace request is more than 1 hour after crash identification, explicitly flag "Late stacktrace request (>1h)" in Process Findings.
 - For crash_detected/anr_yes tickets, always calculate and report "Time to escalation from ticket creation" using ticket created timestamp and the first explicit escalation timestamp in the evidence.
 - If escalation evidence exists but no escalation timestamp can be determined, write "Not found" and explicitly flag this as a process gap.
-- For crash_detected/anr_yes tickets, if there is evidence of a crash/ANR but the review does not explicitly identify crash/ANR handling in Timeline/Process Review, this is a critical miss and the Compliance Score must be 0.
-- For crash_detected/anr_yes tickets, if there is no stacktrace evidence and no explicit stacktrace/crash-log request, the Compliance Score must be 0.
-- For crash_detected/anr_yes tickets, if the first stacktrace/crash-log request is more than 1 hour after crash identification, the Compliance Score must be 0.
-- For crash_detected/anr_yes tickets, escalation must be timely: if first escalation occurs more than 1 hour after crash identification (or cannot be verified due to missing timestamp), the Compliance Score must be 0.
+- For crash_detected/anr_yes tickets, if there is evidence of a crash/ANR but the review does not explicitly identify crash/ANR handling in Timeline/Process Findings, explicitly call that out as a critical ticket QA gap.
+- For crash_detected/anr_yes tickets, if there is no stacktrace evidence and no explicit stacktrace/crash-log request, explicitly call that out as a critical ticket QA gap.
+- For crash_detected/anr_yes tickets, if the first stacktrace/crash-log request is more than 1 hour after crash identification, explicitly call that out as a critical ticket QA gap.
+- For crash_detected/anr_yes tickets, escalation must be timely: if first escalation occurs more than 1 hour after crash identification (or cannot be verified due to missing timestamp), explicitly call that out as a critical ticket QA gap.
 - Before producing the final review, verify that every named person's role or responsibility is directly supported by ticket evidence; remove or soften any claim that depends on inference.
 - Prefer concise, evidence-based statements.
 """
@@ -292,7 +290,13 @@ def _build_ticket_summary(ticket: dict[str, Any]) -> str:
     custom_fields = ticket.get("custom_fields", {})
     ticket_id = ticket.get("id")
     ticket_link = _ticket_link(ticket_id) or f"#{ticket_id}"
-    production_impact = _build_production_impact_assessment(ticket=ticket, comments=[])
+    is_feature_request = _is_feature_request_ticket(ticket.get("subject"))
+    production_impact = (
+        ProductionImpactAssessment()
+        if is_feature_request
+        else _build_production_impact_assessment(ticket=ticket, comments=[])
+    )
+    display_priority = "low" if is_feature_request else ticket.get("priority", "N/A")
     lines = [
         f"# Ticket {ticket_link} - {ticket.get('subject', 'Untitled')}",
         "",
@@ -300,7 +304,7 @@ def _build_ticket_summary(ticket: dict[str, Any]) -> str:
         "| --- | --- |",
         f"| Subject | {ticket.get('subject', 'N/A')} |",
         f"| Status | {ticket.get('status', 'N/A')} |",
-        f"| Priority | {ticket.get('priority', 'N/A')} |",
+        f"| Priority | {display_priority} |",
         f"| Production Issue | {'Yes' if production_impact.is_production_issue else 'No'} |",
         f"| Created | {_format_display_datetime(ticket.get('created_at'))} |",
         f"| Last Updated | {_format_display_datetime(ticket.get('updated_at'))} |",
@@ -525,6 +529,7 @@ TROUBLE_FLAG_WEIGHTS: dict[str, int] = {
     "meeting_summary_missing": 28,
     "status_fields_incomplete": 24,
     "customer_comment_no_response": 30,
+    "sev1_customer_data_follow_up_overdue": 38,
     "solved_without_customer_confirmation": 10,
     "high_priority_no_recent_updates": 25,
     "support_owned_no_recent_updates": 25,
@@ -536,6 +541,7 @@ TROUBLE_FLAG_WEIGHTS: dict[str, int] = {
 SEVERITY_FALLBACK_WEIGHTS = {"high": 30, "medium": 15, "low": 5}
 SEVERITY_RANK = {"high": 3, "medium": 2, "low": 1}
 CUSTOMER_FOLLOW_UP_SLA_HOURS = 4
+SEV1_CUSTOMER_DATA_FOLLOW_UP_SLA_HOURS = 1
 NO_RESPONSE_EXPECTED_OPEN_STALE_DAYS = 5
 OPEN_TICKET_STATUSES = {"new", "open", "pending", "hold", "on-hold"}
 CRASH_SIGNAL_TERMS = [
@@ -721,6 +727,36 @@ UNHAPPY_COMMENT_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bannoy(?:ed|ing)?\b", re.IGNORECASE),
     re.compile(r"\bunacceptable\b", re.IGNORECASE),
 )
+CUSTOMER_DATA_REQUEST_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(
+        r"\b(?:please|kindly|can you|could you|would you|when you can)\b.{0,25}"
+        r"\b(?:provide|share|send|attach|upload|include|confirm|let us know)\b.{0,40}"
+        r"\b(?:log|logs|stacktrace|stack trace|crash log|trace|details|detail|information|info|"
+        r"screenshot|screen recording|recording|video|steps|steps to reproduce|repro|sample app|"
+        r"sample project|apk|ipa|build|version|file|files|data)\b",
+        re.IGNORECASE | re.DOTALL,
+    ),
+    re.compile(
+        r"\b(?:need|needed|awaiting|waiting\s+for|looking\s+for)\b.{0,30}"
+        r"\b(?:more|additional|the)\b.{0,20}"
+        r"\b(?:details|information|info|data|logs|log|stacktrace|stack trace|screenshot|video|"
+        r"steps|repro|sample app|sample project|apk|ipa|build|version)\b",
+        re.IGNORECASE | re.DOTALL,
+    ),
+)
+CUSTOMER_DATA_PROVIDED_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(
+        r"\b(?:attached|attachment|upload(?:ed)?|shared|included|below|here(?:'s| is)|sending)\b.{0,30}"
+        r"\b(?:log|logs|stacktrace|stack trace|crash log|details|information|info|screenshot|"
+        r"screen recording|recording|video|steps|steps to reproduce|repro|sample app|sample project|"
+        r"apk|ipa|build|version|file|files|data)\b",
+        re.IGNORECASE | re.DOTALL,
+    ),
+    re.compile(
+        r"\b(?:app version|os version|build number|build id|package name|bundle id|steps to reproduce)\b",
+        re.IGNORECASE,
+    ),
+)
 
 
 def _parse_iso_datetime(value: str | None) -> datetime | None:
@@ -760,6 +796,50 @@ def _comment_text(comment: dict[str, Any]) -> str:
             ],
         )
     )
+
+
+def _normalize_priority_value(value: Any) -> str:
+    return str(value or "").strip().lower().replace("-", " ").replace("_", " ")
+
+
+def _is_sev1_priority_value(value: Any) -> bool:
+    normalized = _normalize_priority_value(value)
+    if not normalized:
+        return False
+    return normalized in {"urgent", "sev1", "sev 1", "p1", "priority 1", "priority1", "severity 1", "severity1"}
+
+
+def _is_sev1_ticket(ticket: dict[str, Any], is_escalated: bool) -> bool:
+    if not is_escalated:
+        return False
+
+    custom_fields = ticket.get("custom_fields") if isinstance(ticket.get("custom_fields"), dict) else {}
+    priority_candidates = [
+        ticket.get("priority"),
+        custom_fields.get("Priority"),
+        custom_fields.get("Eng Priority"),
+    ]
+    return any(_is_sev1_priority_value(candidate) for candidate in priority_candidates)
+
+
+def _comment_requests_customer_data(comment: dict[str, Any]) -> bool:
+    text = _comment_text(comment)
+    return any(pattern.search(text) for pattern in CUSTOMER_DATA_REQUEST_PATTERNS)
+
+
+def _customer_comment_provides_requested_data(comment: dict[str, Any]) -> bool:
+    attachments = comment.get("attachments") or []
+    if attachments:
+        return True
+
+    text = _comment_text(comment)
+    if any(pattern.search(text) for pattern in CUSTOMER_DATA_PROVIDED_PATTERNS):
+        return True
+
+    if _contains_any(text, ["exception", "stacktrace", "stack trace", "logcat", "fatal exception", "traceback"]):
+        return True
+
+    return False
 
 
 def _contains_call_mention(text: str | None) -> bool:
@@ -1183,6 +1263,71 @@ def _build_meeting_summary_flag(
     return None
 
 
+def _build_sev1_customer_data_follow_up_flag(
+    ticket: dict[str, Any],
+    comments: list[dict[str, Any]],
+    requester_id: int | None,
+    updated_at: datetime | None,
+    status: str | None,
+    is_escalated: bool,
+) -> TicketTroubleFlag | None:
+    if requester_id is None or str(status or "").strip().lower() not in OPEN_TICKET_STATUSES:
+        return None
+    if not _is_sev1_ticket(ticket, is_escalated=is_escalated):
+        return None
+
+    public_comments_sorted = sorted(
+        [comment for comment in comments if comment.get("public")],
+        key=lambda c: _parse_iso_datetime(c.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc),
+    )
+    if not public_comments_sorted:
+        return None
+
+    outstanding_since: datetime | None = None
+    last_touch_at: datetime | None = None
+
+    for comment in public_comments_sorted:
+        comment_time = _parse_iso_datetime(comment.get("created_at"))
+        if comment_time is None:
+            continue
+
+        is_customer_comment = comment.get("author_id") == requester_id
+        if is_customer_comment:
+            if last_touch_at is None:
+                continue
+            if _customer_comment_provides_requested_data(comment):
+                outstanding_since = None
+                last_touch_at = None
+                continue
+            last_touch_at = comment_time
+            continue
+
+        if last_touch_at is not None:
+            last_touch_at = comment_time
+        if _comment_requests_customer_data(comment):
+            outstanding_since = comment_time
+            last_touch_at = comment_time
+
+    if outstanding_since is None or last_touch_at is None:
+        return None
+
+    reference_time = updated_at or datetime.now(timezone.utc)
+    follow_up_deadline = timedelta(hours=SEV1_CUSTOMER_DATA_FOLLOW_UP_SLA_HOURS)
+    if reference_time - last_touch_at <= follow_up_deadline:
+        return None
+
+    hours_waiting = max(int((reference_time - last_touch_at).total_seconds() // 3600), 1)
+    return TicketTroubleFlag(
+        code="sev1_customer_data_follow_up_overdue",
+        severity="high",
+        message=(
+            "SEV1 ticket is still waiting on customer-requested data. "
+            f"Last public touch while awaiting that data was {hours_waiting}h ago; "
+            "follow up hourly until the customer provides it."
+        ),
+    )
+
+
 def _extract_merged_ticket_id_from_comment(comment: dict[str, Any]) -> int | None:
     text = " ".join(
         filter(
@@ -1348,7 +1493,7 @@ def _is_title_structured(subject: str | None) -> bool:
 def _is_feature_request_ticket(subject: str | None) -> bool:
     if not subject:
         return False
-    return subject.startswith("Feature Request - ")
+    return re.search(r"\bfeature request\b", subject, re.IGNORECASE) is not None
 
 
 def _adjust_trouble_risk_score(status: str | None, base_risk_score: int) -> int:
@@ -1429,7 +1574,37 @@ def _build_ticket_trouble_assessment(
     custom_fields = ticket.get("custom_fields") if isinstance(ticket.get("custom_fields"), dict) else {}
     is_escalated = _is_escalated_ticket(ticket)
     status_with = str(custom_fields.get("Status With") or "").strip().lower()
-    production_impact = _build_production_impact_assessment(ticket=ticket, comments=comments)
+    is_feature_request = _is_feature_request_ticket(subject)
+    if is_feature_request:
+        production_impact = ProductionImpactAssessment()
+    else:
+        production_impact = _build_production_impact_assessment(ticket=ticket, comments=comments)
+
+    if is_feature_request:
+        tom_tovar_comment_metadata = _build_tom_tovar_comment_metadata(comments)
+        recent_comment_notes = _extract_recent_comment_notes(comments=comments, requester_id=requester_id)
+        return TicketTroubleAssessment(
+            ticket_id=ticket_id,
+            ticket_url=_ticket_url(ticket_id) or "",
+            ticket_link=_ticket_link(ticket_id) or "",
+            subject=subject,
+            status=status,
+            priority="low",
+            is_escalated=is_escalated,
+            priority_interpretation="Feature request title detected: treat as low priority with no operational risk.",
+            in_trouble=False,
+            risk_score=0,
+            flags=[],
+            crash_attachment_summary=None,
+            production_impact=production_impact,
+            recent_comment_notes=recent_comment_notes,
+            tom="☑" if tom_tovar_comment_metadata["tom_tovar_commented"] else "☐",
+            tom_tovar_commented=tom_tovar_comment_metadata["tom_tovar_commented"],
+            tom_tovar_comment_marker=tom_tovar_comment_metadata["tom_tovar_comment_marker"],
+            tom_tovar_comment_count=tom_tovar_comment_metadata["tom_tovar_comment_count"],
+            tom_tovar_latest_comment_at=tom_tovar_comment_metadata["tom_tovar_latest_comment_at"],
+            tom_tovar_comment_summary=tom_tovar_comment_metadata["tom_tovar_comment_summary"],
+        )
 
     public_comments = [c for c in comments if c.get("public")]
     crash_tag_reviewed = "crash_reviewed" in tags
@@ -1719,6 +1894,17 @@ def _build_ticket_trouble_assessment(
     )
     if meeting_summary_flag is not None:
         flags.append(meeting_summary_flag)
+
+    sev1_customer_data_follow_up_flag = _build_sev1_customer_data_follow_up_flag(
+        ticket=ticket,
+        comments=comments,
+        requester_id=requester_id,
+        updated_at=updated_at,
+        status=status,
+        is_escalated=is_escalated,
+    )
+    if sev1_customer_data_follow_up_flag is not None:
+        flags.append(sev1_customer_data_follow_up_flag)
 
     recent_comment_notes = _extract_recent_comment_notes(comments=comments, requester_id=requester_id)
 
@@ -2023,7 +2209,11 @@ def review_ticket(
             requester_id=ticket.get("requester_id"),
             enabled="crash_detected" in ticket_tags and "crash_reviewed" not in ticket_tags,
         ).model_dump(),
-        rubric=TICKET_ANALYSIS_TEMPLATE.format(ticket_id=resolved_ticket_id, ticket_link=_ticket_link(resolved_ticket_id)),
+        rubric=TICKET_ANALYSIS_TEMPLATE.format(
+            ticket_id=resolved_ticket_id,
+            ticket_link=_ticket_link(resolved_ticket_id),
+            attribution_guardrails=ATTRIBUTION_GUARDRAILS,
+        ),
     )
 
 
@@ -2310,7 +2500,7 @@ def sample_solved_tickets_for_agent(
 
 @mcp.tool(
     name="review_random_solved_tickets_for_agent",
-    description="Sample resolved tickets (solved/closed) for an agent in a date range and return the full review packet",
+    description="Sample resolved tickets (solved/closed) for an agent in a date range and return a ticket QA review packet",
     structured_output=True,
 )
 def review_random_solved_tickets_for_agent(
@@ -2323,7 +2513,7 @@ def review_random_solved_tickets_for_agent(
         str,
         Field(description="Exclusive upper bound date for resolved tickets (based on updated_at), e.g. 2026-03-01."),
     ],
-    count: Annotated[int, Field(description="How many random tickets to review.")] = 4,
+    count: Annotated[int, Field(description="How many random tickets to review for ticket QA.")] = 4,
     exclude_api_created: Annotated[
         bool,
         Field(description="Exclude tickets whose Zendesk via.channel is api."),
