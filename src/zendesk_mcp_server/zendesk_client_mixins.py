@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import urllib.error
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("zendesk-mcp-client")
@@ -81,6 +82,23 @@ class ZendeskReadMixin:
         except Exception as e:
             logger.error(f"Failed to fetch comments for ticket {ticket_id}: {e}")
             raise Exception(f"Failed to get comments for ticket {ticket_id}: {str(e)}")
+
+    def download_attachment(self, attachment_url: str, destination: str | Path) -> Path:
+        """
+        Download a Zendesk attachment using the configured auth headers.
+        """
+        try:
+            return self._download_to_file(attachment_url, destination)
+        except urllib.error.HTTPError as e:
+            error_body = e.read().decode() if e.fp else "No response body"
+            logger.error(f"Failed to download Zendesk attachment {attachment_url}: HTTP {e.code} - {e.reason}. {error_body}")
+            raise Exception(f"Failed to download attachment: HTTP {e.code} - {e.reason}. {error_body}")
+        except urllib.error.URLError as e:
+            logger.error(f"Failed to download Zendesk attachment {attachment_url}: {e}")
+            raise Exception(f"Failed to download attachment: {str(e)}")
+        except Exception as e:
+            logger.error(f"Failed to download Zendesk attachment {attachment_url}: {e}")
+            raise Exception(f"Failed to download attachment: {str(e)}")
 
     def get_all_articles(self) -> Dict[str, Any]:
         """

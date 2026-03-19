@@ -4,6 +4,7 @@ import os
 import random
 import re
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Annotated, Any
 
 from cachetools.func import ttl_cache
@@ -273,6 +274,31 @@ def _ticket_link(ticket_id: int | None) -> str | None:
     if ticket_url is None:
         return None
     return f"[{ticket_id}]({ticket_url})"
+
+
+def _sanitize_attachment_filename(file_name: str | None, attachment_id: int | None = None) -> str:
+    candidate = (file_name or "").strip()
+    candidate = candidate.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+    candidate = re.sub(r"[^A-Za-z0-9._ -]+", "_", candidate).strip(" .")
+    if not candidate:
+        suffix = attachment_id if attachment_id is not None else "attachment"
+        candidate = f"attachment-{suffix}.bin"
+    return candidate
+
+
+def _next_available_attachment_path(directory: Path, file_name: str) -> Path:
+    candidate = directory / file_name
+    if not candidate.exists():
+        return candidate
+
+    stem = candidate.stem
+    suffix = candidate.suffix
+    counter = 2
+    while True:
+        alternative = directory / f"{stem}-{counter}{suffix}"
+        if not alternative.exists():
+            return alternative
+        counter += 1
 
 
 def _format_display_datetime(value: str | None) -> str:
@@ -2610,6 +2636,72 @@ def get_ticket_comments(
     comments = zendesk_client.get_ticket_comments(ticket_id)
     comments = _hydrate_comment_author_fields(comments)
     return json.dumps(comments)
+
+
+@mcp.tool(
+    name="download_ticket_attachments",
+    description="Download Zendesk ticket attachments into ~/Downloads/zenmcp/<ticket_id>/ using authenticated requests",
+)
+def download_ticket_attachments(
+    ticket_id: Annotated[int, Field(description="The ID of the ticket whose attachments should be downloaded")],
+    stacktrace_only: Annotated[
+        bool,
+        Field(description="If true, only download attachments classified as stacktraces"),
+    ] = False,
+) -> str:
+    comments = zendesk_client.get_ticket_comments(ticket_id)
+    destination_dir = Path.home() / "Downloads" / "zenmcp" / str(ticket_id)
+    destination_dir.mkdir(parents=True, exist_ok=True)
+
+    downloaded: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+
+    for comment in comments:
+        for attachment in (comment.get("attachments") or []):
+            file_name = attachment.get("file_name")
+            content_type = attachment.get("content_type")
+            evidence_type = _classify_crash_attachment(file_name=file_name, content_type=content_type)
+            if stacktrace_only and evidence_type != "stacktrace":
+                continue
+
+            attachment_url = attachment.get("mapped_content_url") or attachment.get("content_url")
+            if not attachment_url:
+                skipped.append(
+                    {
+                        "comment_id": comment.get("id"),
+                        "attachment_id": attachment.get("id"),
+                        "file_name": file_name,
+                        "reason": "missing content_url",
+                    }
+                )
+                continue
+
+            safe_name = _sanitize_attachment_filename(file_name, attachment.get("id"))
+            destination_path = _next_available_attachment_path(destination_dir, safe_name)
+            saved_path = zendesk_client.download_attachment(attachment_url, destination_path)
+            downloaded.append(
+                {
+                    "comment_id": comment.get("id"),
+                    "attachment_id": attachment.get("id"),
+                    "file_name": file_name,
+                    "saved_as": saved_path.name,
+                    "saved_path": str(saved_path),
+                    "content_type": content_type,
+                    "size": attachment.get("size"),
+                }
+            )
+
+    return json.dumps(
+        {
+            "ticket_id": ticket_id,
+            "download_directory": str(destination_dir),
+            "stacktrace_only": stacktrace_only,
+            "downloaded_count": len(downloaded),
+            "skipped_count": len(skipped),
+            "downloaded": downloaded,
+            "skipped": skipped,
+        }
+    )
 
 
 @mcp.tool(name="create_ticket_comment", description="Create a new comment on an existing Zendesk ticket")

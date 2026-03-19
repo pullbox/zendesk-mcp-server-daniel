@@ -2,6 +2,7 @@ import asyncio
 import importlib
 import json
 import sys
+import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
@@ -170,6 +171,8 @@ class TestGetTicketsLastFiveHours(unittest.TestCase):
                             "content_type": "text/plain",
                             "size": 2048,
                             "inline": False,
+                            "content_url": "https://example.zendesk.com/attachments/token/crash.ips",
+                            "mapped_content_url": "https://example.zendesk.com/attachments/mapped/crash.ips",
                         }
                     ],
                 }
@@ -183,6 +186,35 @@ class TestGetTicketsLastFiveHours(unittest.TestCase):
         self.assertEqual(comments[0]["attachments"][0]["content_type"], "text/plain")
         self.assertEqual(comments[0]["attachments"][0]["size"], 2048)
         self.assertFalse(comments[0]["attachments"][0]["inline"])
+        self.assertEqual(
+            comments[0]["attachments"][0]["content_url"],
+            "https://example.zendesk.com/attachments/token/crash.ips",
+        )
+        self.assertEqual(
+            comments[0]["attachments"][0]["mapped_content_url"],
+            "https://example.zendesk.com/attachments/mapped/crash.ips",
+        )
+
+    def test_download_attachment_uses_authenticated_request_and_writes_file(self) -> None:
+        payload = b"stacktrace-content"
+        mock_response = MagicMock()
+        mock_response.read.return_value = payload
+        mock_urlopen = MagicMock()
+        mock_urlopen.return_value.__enter__.return_value = mock_response
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            destination = Path(tmpdir) / "ticket-777" / "crash.ips"
+            with patch("zendesk_mcp_server.zendesk_client.urllib.request.urlopen", mock_urlopen):
+                saved_path = self.client.download_attachment(
+                    "https://example.zendesk.com/attachments/token/crash.ips",
+                    destination,
+                )
+
+            request = mock_urlopen.call_args.args[0]
+            self.assertEqual(request.full_url, "https://example.zendesk.com/attachments/token/crash.ips")
+            self.assertEqual(request.get_header("Authorization"), self.client.auth_header)
+            self.assertEqual(saved_path, destination)
+            self.assertEqual(destination.read_bytes(), payload)
 
     def test_get_tickets_stale_filter_excludes_internal_in_query(self) -> None:
         fixed_now = datetime(2026, 3, 2, 15, 30, 0, tzinfo=timezone.utc)
@@ -3858,6 +3890,64 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
         structured = response.root.structuredContent
         self.assertEqual(structured["users_by_id"]["1001"]["email"], "requester1@example.com")
         self.assertEqual(structured["missing_ids"], [1002])
+        self.assertFalse(response.root.isError)
+
+    def test_download_ticket_attachments_tool_saves_files_in_downloads_ticket_directory(self) -> None:
+        request = CallToolRequest(
+            method="tools/call",
+            params=CallToolRequestParams(
+                name="download_ticket_attachments",
+                arguments={"ticket_id": 777, "stacktrace_only": True},
+            ),
+        )
+
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        comments_payload = [
+            {
+                "id": 1001,
+                "attachments": [
+                    {
+                        "id": 2001,
+                        "file_name": "crash.ips",
+                        "content_type": "text/plain",
+                        "size": 2048,
+                        "mapped_content_url": "https://example.zendesk.com/attachments/mapped/crash.ips",
+                    },
+                    {
+                        "id": 2002,
+                        "file_name": "screen_recording.mp4",
+                        "content_type": "video/mp4",
+                        "size": 999,
+                        "mapped_content_url": "https://example.zendesk.com/attachments/mapped/screen_recording.mp4",
+                    },
+                ],
+            }
+        ]
+
+        def fake_download(_url: str, destination: str | Path) -> Path:
+            path = Path(destination)
+            path.write_text("downloaded", encoding="utf-8")
+            return path
+
+        with tempfile.TemporaryDirectory() as tmpdir, (
+            patch.object(server_module, "zendesk_client") as mock_client,
+            patch.object(server_module.Path, "home", return_value=Path(tmpdir)),
+        ):
+            mock_client.get_ticket_comments.return_value = comments_payload
+            mock_client.download_attachment.side_effect = fake_download
+
+            handler = server_module.mcp._mcp_server.request_handlers[CallToolRequest]
+            response = asyncio.run(handler(request))
+
+        payload = json.loads(response.root.content[0].text)
+        self.assertEqual(payload["ticket_id"], 777)
+        self.assertTrue(payload["stacktrace_only"])
+        self.assertEqual(payload["downloaded_count"], 1)
+        self.assertEqual(payload["skipped_count"], 0)
+        self.assertEqual(payload["downloaded"][0]["saved_as"], "crash.ips")
+        self.assertTrue(payload["downloaded"][0]["saved_path"].endswith("/Downloads/zenmcp/777/crash.ips"))
         self.assertFalse(response.root.isError)
 
 
