@@ -4,7 +4,6 @@ import os
 import random
 import re
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from typing import Annotated, Any
 
 from cachetools.func import ttl_cache
@@ -276,31 +275,6 @@ def _ticket_link(ticket_id: int | None) -> str | None:
     return f"[{ticket_id}]({ticket_url})"
 
 
-def _sanitize_attachment_filename(file_name: str | None, attachment_id: int | None = None) -> str:
-    candidate = (file_name or "").strip()
-    candidate = candidate.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
-    candidate = re.sub(r"[^A-Za-z0-9._ -]+", "_", candidate).strip(" .")
-    if not candidate:
-        suffix = attachment_id if attachment_id is not None else "attachment"
-        candidate = f"attachment-{suffix}.bin"
-    return candidate
-
-
-def _next_available_attachment_path(directory: Path, file_name: str) -> Path:
-    candidate = directory / file_name
-    if not candidate.exists():
-        return candidate
-
-    stem = candidate.stem
-    suffix = candidate.suffix
-    counter = 2
-    while True:
-        alternative = directory / f"{stem}-{counter}{suffix}"
-        if not alternative.exists():
-            return alternative
-        counter += 1
-
-
 def _format_display_datetime(value: str | None) -> str:
     if not value:
         return "N/A"
@@ -555,6 +529,7 @@ TROUBLE_FLAG_WEIGHTS: dict[str, int] = {
     "meeting_summary_missing": 28,
     "status_fields_incomplete": 24,
     "customer_comment_no_response": 30,
+    "production_customer_comment_no_response": 56,
     "sev1_customer_data_follow_up_overdue": 38,
     "solved_without_customer_confirmation": 10,
     "high_priority_no_recent_updates": 25,
@@ -567,6 +542,7 @@ TROUBLE_FLAG_WEIGHTS: dict[str, int] = {
 SEVERITY_FALLBACK_WEIGHTS = {"high": 30, "medium": 15, "low": 5}
 SEVERITY_RANK = {"high": 3, "medium": 2, "low": 1}
 CUSTOMER_FOLLOW_UP_SLA_HOURS = 4
+PRODUCTION_CUSTOMER_FOLLOW_UP_SLA_HOURS = 2
 SEV1_CUSTOMER_DATA_FOLLOW_UP_SLA_HOURS = 1
 NO_RESPONSE_EXPECTED_OPEN_STALE_DAYS = 5
 OPEN_TICKET_STATUSES = {"new", "open", "pending", "hold", "on-hold"}
@@ -752,6 +728,12 @@ UNHAPPY_COMMENT_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bdisappointed\b", re.IGNORECASE),
     re.compile(r"\bannoy(?:ed|ing)?\b", re.IGNORECASE),
     re.compile(r"\bunacceptable\b", re.IGNORECASE),
+    re.compile(r"\bno\s+(?:one|body)\s+has\s+(?:responded|replied|gotten\s+back)\b", re.IGNORECASE),
+    re.compile(r"\bno\s+response\b", re.IGNORECASE),
+    re.compile(r"\bstill\s+waiting\b", re.IGNORECASE),
+    re.compile(r"\bwaiting\s+for\s+(?:an?\s+)?(?:response|reply|update)\b", re.IGNORECASE),
+    re.compile(r"\bany\s+update\b", re.IGNORECASE),
+    re.compile(r"\bfollow(?:ing)?\s+up\b", re.IGNORECASE),
 )
 CUSTOMER_DATA_REQUEST_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(
@@ -822,6 +804,15 @@ def _comment_text(comment: dict[str, Any]) -> str:
             ],
         )
     )
+
+
+def _comment_snippet(comment: dict[str, Any], limit: int = 140) -> str:
+    text = re.sub(r"\s+", " ", _comment_text(comment)).strip()
+    if not text:
+        return ""
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit].rstrip()}..."
 
 
 def _normalize_priority_value(value: Any) -> str:
@@ -913,9 +904,109 @@ def _build_customer_unhappy_flag(
                 severity="high",
                 message=(
                     "Comment suggests customer dissatisfaction; treat this as a high-priority item. "
-                    f"Evidence: '{match.group(0)}' in {source} at {created_at}."
+                    f"Evidence: '{match.group(0)}' in {source} at {created_at}. "
+                    f"Comment: \"{_comment_snippet(comment)}\""
                 ),
             )
+    return None
+
+
+def _build_customer_comment_response_flag(
+    comments: list[dict[str, Any]],
+    requester_id: int | None,
+    updated_at: datetime | None,
+    status: str | None,
+    production_impact: ProductionImpactAssessment,
+) -> TicketTroubleFlag | None:
+    if requester_id is None:
+        return None
+
+    public_comments_sorted = sorted(
+        [comment for comment in comments if comment.get("public")],
+        key=lambda c: _parse_iso_datetime(c.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc),
+    )
+    if not public_comments_sorted:
+        return None
+
+    reference_time = updated_at or datetime.now(timezone.utc)
+    follow_up_sla_hours = (
+        PRODUCTION_CUSTOMER_FOLLOW_UP_SLA_HOURS
+        if production_impact.is_production_issue
+        else CUSTOMER_FOLLOW_UP_SLA_HOURS
+    )
+    follow_up_deadline = timedelta(hours=follow_up_sla_hours)
+
+    customer_public_comments = [
+        comment for comment in public_comments_sorted if comment.get("author_id") == requester_id
+    ]
+    for customer_comment in customer_public_comments:
+        customer_time = _parse_iso_datetime(customer_comment.get("created_at"))
+        if customer_time is None:
+            continue
+
+        if _is_no_response_expected_comment(customer_comment):
+            has_any_later_public_comment = any(
+                (_parse_iso_datetime(possible_reply.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc))
+                > customer_time
+                for possible_reply in public_comments_sorted
+            )
+            if (
+                status in OPEN_TICKET_STATUSES
+                and (reference_time - customer_time) > timedelta(days=NO_RESPONSE_EXPECTED_OPEN_STALE_DAYS)
+                and not has_any_later_public_comment
+            ):
+                return TicketTroubleFlag(
+                    code="customer_comment_no_response",
+                    severity="high",
+                    message=(
+                        "Ticket stayed open more than "
+                        f"{NO_RESPONSE_EXPECTED_OPEN_STALE_DAYS} days after a no-response-expected "
+                        "customer update, with no later public comments."
+                    ),
+                )
+            continue
+
+        first_follow_up_after_customer: datetime | None = None
+        for possible_reply in public_comments_sorted:
+            reply_time = _parse_iso_datetime(possible_reply.get("created_at"))
+            if reply_time is None or reply_time <= customer_time:
+                continue
+            if possible_reply.get("author_id") == requester_id:
+                continue
+            first_follow_up_after_customer = reply_time
+            break
+
+        response_delay = (
+            first_follow_up_after_customer - customer_time
+            if first_follow_up_after_customer is not None
+            else reference_time - customer_time
+        )
+        if response_delay <= follow_up_deadline:
+            continue
+
+        delay_hours = max(int(response_delay.total_seconds() // 3600), 1)
+        snippet = _comment_snippet(customer_comment)
+        if production_impact.is_production_issue:
+            return TicketTroubleFlag(
+                code="production_customer_comment_no_response",
+                severity="high",
+                message=(
+                    "Production-impact customer comment is still waiting on a public Appdome response. "
+                    f"No public reply within {follow_up_sla_hours}h; waiting about {delay_hours}h. "
+                    f"Comment: \"{snippet}\""
+                ),
+            )
+
+        return TicketTroubleFlag(
+            code="customer_comment_no_response",
+            severity="high",
+            message=(
+                "Customer public comment did not receive a public Appdome response "
+                f"within {follow_up_sla_hours}h; waiting about {delay_hours}h. "
+                f"Comment: \"{snippet}\""
+            ),
+        )
+
     return None
 
 
@@ -1156,6 +1247,11 @@ def _extract_recent_comment_notes(comments: list[dict[str, Any]], requester_id: 
 
         if _contains_call_mention(text):
             notes.append(f"Recent comment mentions a call/scheduling ({source}, {created_at}).")
+
+        if source == "customer_public_comment":
+            snippet = _comment_snippet(comment, limit=100)
+            if snippet:
+                notes.append(f"Recent customer comment ({created_at}): \"{snippet}\"")
 
         for datetime_match in DATE_OR_TIME_PATTERN.finditer(text):
             notes.append(
@@ -1748,80 +1844,15 @@ def _build_ticket_trouble_assessment(
     customer_public_comments = [
         c for c in public_comments_sorted if requester_id is not None and c.get("author_id") == requester_id
     ]
-    follow_up_deadline = timedelta(hours=CUSTOMER_FOLLOW_UP_SLA_HOURS)
-    for customer_comment in customer_public_comments:
-        customer_time = _parse_iso_datetime(customer_comment.get("created_at"))
-        if customer_time is None:
-            continue
-        has_follow_up = False
-        first_follow_up_after_customer: datetime | None = None
-        for possible_reply in public_comments_sorted:
-            reply_time = _parse_iso_datetime(possible_reply.get("created_at"))
-            if reply_time is None:
-                continue
-            if reply_time <= customer_time:
-                continue
-            if requester_id is not None and possible_reply.get("author_id") == requester_id:
-                continue
-            has_follow_up = True
-            first_follow_up_after_customer = reply_time
-            break
-
-        if _is_no_response_expected_comment(customer_comment):
-            reference_time = updated_at or datetime.now(timezone.utc)
-            has_any_later_public_comment = any(
-                (_parse_iso_datetime(possible_reply.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc))
-                > customer_time
-                for possible_reply in public_comments_sorted
-            )
-            if (
-                status in OPEN_TICKET_STATUSES
-                and (reference_time - customer_time) > timedelta(days=NO_RESPONSE_EXPECTED_OPEN_STALE_DAYS)
-                and not has_any_later_public_comment
-            ):
-                flags.append(
-                    TicketTroubleFlag(
-                        code="customer_comment_no_response",
-                        severity="high",
-                        message=(
-                            "Ticket stayed open more than "
-                            f"{NO_RESPONSE_EXPECTED_OPEN_STALE_DAYS} days after a no-response-expected "
-                            "customer update, with no later public comments."
-                        ),
-                    )
-                )
-                break
-            continue
-
-        if has_follow_up and first_follow_up_after_customer is not None:
-            response_delay = first_follow_up_after_customer - customer_time
-            if response_delay > follow_up_deadline:
-                flags.append(
-                    TicketTroubleFlag(
-                        code="customer_comment_no_response",
-                        severity="high",
-                        message=(
-                            "Customer public comment did not receive a public agent response "
-                            f"within {CUSTOMER_FOLLOW_UP_SLA_HOURS}h."
-                        ),
-                    )
-                )
-                break
-            continue
-
-        reference_time = updated_at or datetime.now(timezone.utc)
-        if reference_time - customer_time > follow_up_deadline:
-            flags.append(
-                TicketTroubleFlag(
-                    code="customer_comment_no_response",
-                    severity="high",
-                    message=(
-                        "Customer public comment did not receive a public agent response "
-                        f"within {CUSTOMER_FOLLOW_UP_SLA_HOURS}h."
-                    ),
-                )
-            )
-            break
+    customer_response_flag = _build_customer_comment_response_flag(
+        comments=comments,
+        requester_id=requester_id,
+        updated_at=updated_at,
+        status=status,
+        production_impact=production_impact,
+    )
+    if customer_response_flag is not None:
+        flags.append(customer_response_flag)
 
     confirmation_terms = ["resolved", "works", "working", "fixed", "thank", "confirmed", "solved"]
     has_customer_confirmation = any(
@@ -1999,6 +2030,8 @@ def _build_ticket_trouble_markdown_list(tickets: list[TicketTroubleAssessment]) 
             highlights.append("CUSTOMER-URGENT")
         if any(flag.code == "production_user_impact" for flag in ticket.flags):
             highlights.append("PROD-IMPACT")
+        if any(flag.code == "production_customer_comment_no_response" for flag in ticket.flags):
+            highlights.append("PROD-NO-RESPONSE")
         if any(flag.code == "customer_unhappy" for flag in ticket.flags):
             highlights.append("CUSTOMER-UNHAPPY")
         highlight_text = f" | highlights={','.join(highlights)}" if highlights else ""
@@ -2636,72 +2669,6 @@ def get_ticket_comments(
     comments = zendesk_client.get_ticket_comments(ticket_id)
     comments = _hydrate_comment_author_fields(comments)
     return json.dumps(comments)
-
-
-@mcp.tool(
-    name="download_ticket_attachments",
-    description="Download Zendesk ticket attachments into ~/Downloads/zenmcp/<ticket_id>/ using authenticated requests",
-)
-def download_ticket_attachments(
-    ticket_id: Annotated[int, Field(description="The ID of the ticket whose attachments should be downloaded")],
-    stacktrace_only: Annotated[
-        bool,
-        Field(description="If true, only download attachments classified as stacktraces"),
-    ] = False,
-) -> str:
-    comments = zendesk_client.get_ticket_comments(ticket_id)
-    destination_dir = Path.home() / "Downloads" / "zenmcp" / str(ticket_id)
-    destination_dir.mkdir(parents=True, exist_ok=True)
-
-    downloaded: list[dict[str, Any]] = []
-    skipped: list[dict[str, Any]] = []
-
-    for comment in comments:
-        for attachment in (comment.get("attachments") or []):
-            file_name = attachment.get("file_name")
-            content_type = attachment.get("content_type")
-            evidence_type = _classify_crash_attachment(file_name=file_name, content_type=content_type)
-            if stacktrace_only and evidence_type != "stacktrace":
-                continue
-
-            attachment_url = attachment.get("mapped_content_url") or attachment.get("content_url")
-            if not attachment_url:
-                skipped.append(
-                    {
-                        "comment_id": comment.get("id"),
-                        "attachment_id": attachment.get("id"),
-                        "file_name": file_name,
-                        "reason": "missing content_url",
-                    }
-                )
-                continue
-
-            safe_name = _sanitize_attachment_filename(file_name, attachment.get("id"))
-            destination_path = _next_available_attachment_path(destination_dir, safe_name)
-            saved_path = zendesk_client.download_attachment(attachment_url, destination_path)
-            downloaded.append(
-                {
-                    "comment_id": comment.get("id"),
-                    "attachment_id": attachment.get("id"),
-                    "file_name": file_name,
-                    "saved_as": saved_path.name,
-                    "saved_path": str(saved_path),
-                    "content_type": content_type,
-                    "size": attachment.get("size"),
-                }
-            )
-
-    return json.dumps(
-        {
-            "ticket_id": ticket_id,
-            "download_directory": str(destination_dir),
-            "stacktrace_only": stacktrace_only,
-            "downloaded_count": len(downloaded),
-            "skipped_count": len(skipped),
-            "downloaded": downloaded,
-            "skipped": skipped,
-        }
-    )
 
 
 @mcp.tool(name="create_ticket_comment", description="Create a new comment on an existing Zendesk ticket")

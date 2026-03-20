@@ -26,8 +26,6 @@ class CommentsRepository:
                         "content_type": attachment.get("content_type"),
                         "size": attachment.get("size"),
                         "inline": attachment.get("inline"),
-                        "content_url": attachment.get("content_url"),
-                        "mapped_content_url": attachment.get("mapped_content_url"),
                     }
                     for attachment in (comment.get("attachments", []) or [])
                 ]

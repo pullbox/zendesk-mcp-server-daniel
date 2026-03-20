@@ -4,7 +4,6 @@ import base64
 import json
 import logging
 import urllib.request
-from pathlib import Path
 from typing import Any, Dict
 
 from datetime import datetime, timezone
@@ -84,17 +83,6 @@ class ZendeskClient(
         req.add_header("Content-Type", "application/json")
         with urllib.request.urlopen(req, timeout=timeout) as response:
             return json.loads(response.read().decode())
-
-    def _download_to_file(self, url: str, destination: str | Path, timeout: int = 60) -> Path:
-        destination_path = Path(destination)
-        destination_path.parent.mkdir(parents=True, exist_ok=True)
-
-        req = urllib.request.Request(url)
-        req.add_header("Authorization", self.auth_header)
-        with urllib.request.urlopen(req, timeout=timeout) as response:
-            destination_path.write_bytes(response.read())
-
-        return destination_path
 
     def _current_utc_now(self) -> datetime:
         return datetime.now(timezone.utc)
