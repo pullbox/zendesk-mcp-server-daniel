@@ -1229,7 +1229,7 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
                     "updated_at": "2026-03-20T10:00:00Z",
                 },
             ],
-            "query": "type:ticket tags:crash_detected status<solved -tags:internal",
+            "query": "type:ticket tags:crash_detected status:open -tags:internal",
             "total_matches": 1,
             "retrieved_count": 1,
             "truncated": False,
@@ -1297,6 +1297,66 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
             include_solved=False,
             exclude_internal=True,
         )
+        self.assertFalse(response.root.isError)
+
+    def test_scan_crash_tickets_in_trouble_skips_pending_crash_tickets(self) -> None:
+        search_payload = {
+            "tickets": [
+                {
+                    "id": 9151,
+                    "subject": "ACME | iOS | Crash on startup",
+                    "status": "pending",
+                    "priority": "normal",
+                    "created_at": "2026-03-01T10:00:00Z",
+                    "updated_at": "2026-03-20T10:00:00Z",
+                },
+            ],
+            "query": "type:ticket tags:crash_detected status:open -tags:internal",
+            "total_matches": 1,
+            "retrieved_count": 1,
+            "truncated": False,
+        }
+        full_ticket_payload = {
+            "id": 9151,
+            "subject": "ACME | iOS | Crash on startup",
+            "status": "pending",
+            "priority": "normal",
+            "created_at": "2026-03-01T10:00:00Z",
+            "updated_at": "2026-03-20T10:00:00Z",
+            "requester_id": 1001,
+            "tags": ["crash_detected"],
+            "custom_fields": {
+                "Status With": "customer",
+                "Support Stage": "investigation",
+                "Release Stage": "Production",
+            },
+        }
+
+        request = CallToolRequest(
+            method="tools/call",
+            params=CallToolRequestParams(
+                name="scan_crash_tickets_in_trouble",
+                arguments={"tag": "crash_detected", "max_results": 50},
+            ),
+        )
+
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        with (
+            patch.object(server_module, "zendesk_client") as mock_client,
+            patch.object(server_module, "_prepare_ticket_payload", return_value=full_ticket_payload),
+        ):
+            mock_client.search_open_tickets_by_tag.return_value = search_payload
+
+            handler = server_module.mcp._mcp_server.request_handlers[CallToolRequest]
+            response = asyncio.run(handler(request))
+
+        structured = response.root.structuredContent
+        self.assertEqual(structured["scanned_count"], 0)
+        self.assertEqual(structured["in_trouble_count"], 0)
+        self.assertEqual(structured["tickets"], [])
+        mock_client.get_ticket_comments.assert_not_called()
         self.assertFalse(response.root.isError)
 
     def test_scan_tickets_in_trouble_skips_initial_response_flag_when_first_comment_is_internal(self) -> None:
@@ -2686,6 +2746,100 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
         self.assertTrue(customer_unhappy_flags)
         self.assertIn("still waiting", customer_unhappy_flags[0].message.lower())
         self.assertTrue(any("Recent customer comment" in note for note in assessment.recent_comment_notes))
+
+    def test_multiple_customer_pressure_comments_are_marked_specifically(self) -> None:
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        ticket = {
+            "id": 99102,
+            "subject": "ACME | Android | SDK crash issue",
+            "status": "open",
+            "priority": "normal",
+            "created_at": "2026-03-05T10:00:00Z",
+            "updated_at": "2026-03-05T17:20:00Z",
+            "requester_id": 1001,
+            "tags": [],
+            "custom_fields": {
+                "Status With": "support",
+                "Support Stage": "investigation",
+                "Release Stage": "Production",
+            },
+        }
+        comments = [
+            {
+                "author_id": 2002,
+                "public": True,
+                "body": "Investigating.",
+                "html_body": "<p>Investigating.</p>",
+                "created_at": "2026-03-05T10:10:00Z",
+                "attachments": [],
+            },
+            {
+                "author_id": 1001,
+                "public": True,
+                "body": "We are frustrated and need regular updates on this production crash.",
+                "html_body": "<p>We are frustrated and need regular updates on this production crash.</p>",
+                "created_at": "2026-03-05T11:00:00Z",
+                "attachments": [],
+            },
+            {
+                "author_id": 1001,
+                "public": True,
+                "body": "Please schedule a Zoom meeting and keep us updated hourly.",
+                "html_body": "<p>Please schedule a Zoom meeting and keep us updated hourly.</p>",
+                "created_at": "2026-03-05T13:00:00Z",
+                "attachments": [],
+            },
+            {
+                "author_id": 1001,
+                "public": True,
+                "body": "Following up again. We are still waiting for a response.",
+                "html_body": "<p>Following up again. We are still waiting for a response.</p>",
+                "created_at": "2026-03-05T16:00:00Z",
+                "attachments": [],
+            },
+        ]
+
+        assessment = server_module._build_ticket_trouble_assessment(
+            ticket=ticket,
+            comments=comments,
+            initial_response_sla_minutes=60,
+            high_priority_stale_hours=8,
+        )
+
+        pressure_flags = [flag for flag in assessment.flags if flag.code == "customer_repeated_pressure"]
+        self.assertTrue(pressure_flags)
+        self.assertIn("multiple pressure/escalation comments", pressure_flags[0].message.lower())
+        self.assertIn("repeat update requests", pressure_flags[0].message.lower())
+        self.assertIn("meeting/call requests", pressure_flags[0].message.lower())
+        self.assertIn("dissatisfaction/frustration", pressure_flags[0].message.lower())
+
+    def test_scan_tickets_in_trouble_markdown_highlights_customer_pressure(self) -> None:
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        assessment = server_module.TicketTroubleAssessment(
+            ticket_id=99103,
+            ticket_url="https://appdomesupport.zendesk.com/agent/tickets/99103",
+            ticket_link="[99103](https://appdomesupport.zendesk.com/agent/tickets/99103)",
+            subject="ACME | Android | SDK crash issue",
+            status="open",
+            priority="normal",
+            is_escalated=False,
+            in_trouble=True,
+            risk_score=88,
+            flags=[
+                server_module.TicketTroubleFlag(
+                    code="customer_repeated_pressure",
+                    severity="high",
+                    message="Customer posted multiple pressure/escalation comments.",
+                )
+            ],
+        )
+
+        markdown = server_module._build_ticket_trouble_markdown_list([assessment])
+        self.assertIn("CUSTOMER-PRESSURE", markdown)
 
     def test_ticket_with_uat_only_signals_is_not_flagged_as_production_issue(self) -> None:
         with patch("zendesk_mcp_server.zendesk_client.Zenpy"):

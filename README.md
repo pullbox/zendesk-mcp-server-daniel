@@ -254,7 +254,7 @@ Current flag conditions include:
 
 ### scan_crash_tickets_in_trouble
 
-Scan all open tickets with a crash-related tag and flag likely QA/process issues, without a created-date window.
+Scan open, non-internal tickets with a crash-related tag and flag likely QA/process issues, without a created-date window.
 
 - Input:
   - `tag` (default `crash_detected`)
@@ -263,6 +263,11 @@ Scan all open tickets with a crash-related tag and flag likely QA/process issues
   - `exclude_internal` (default `true`)
   - `initial_response_sla_minutes` (default `60`)
   - `high_priority_stale_hours` (default `8`)
+
+- Behavior:
+  - searches `tag=<value>` with `status:open`
+  - excludes `pending`, `solved`, and `closed`
+  - excludes `internal` when `exclude_internal=true`
 
 - Output:
   - Structured result with `tag`, `scanned_count`, `in_trouble_count`, `total_matches`, `retrieved_count`, `truncated`, `ticket_list_markdown`, and per-ticket trouble assessments.

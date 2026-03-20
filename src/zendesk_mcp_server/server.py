@@ -536,6 +536,7 @@ TROUBLE_FLAG_WEIGHTS: dict[str, int] = {
     "internal_tag_title_mismatch": 18,
     "customer_urgency": 51,
     "customer_unhappy": 52,
+    "customer_repeated_pressure": 58,
     "ticket_report_request": 32,
     "meeting_summary_missing": 28,
     "status_fields_incomplete": 24,
@@ -774,6 +775,29 @@ CUSTOMER_DATA_PROVIDED_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(
         r"\b(?:app version|os version|build number|build id|package name|bundle id|steps to reproduce)\b",
         re.IGNORECASE,
+    ),
+)
+CUSTOMER_UPDATE_REQUEST_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\bany\s+update\b", re.IGNORECASE),
+    re.compile(r"\b(?:regular|frequent)\s+updates?\b", re.IGNORECASE),
+    re.compile(r"\bkeep\s+us\s+updated\b", re.IGNORECASE),
+    re.compile(r"\bupdate\s+us\b", re.IGNORECASE),
+    re.compile(r"\bhourly\s+updates?\b", re.IGNORECASE),
+    re.compile(r"\bevery\s+hour\b", re.IGNORECASE),
+    re.compile(r"\bfollow(?:ing)?\s+up\b", re.IGNORECASE),
+    re.compile(r"\bstill\s+waiting\b", re.IGNORECASE),
+    re.compile(r"\bwaiting\s+for\s+(?:an?\s+)?(?:update|response|reply)\b", re.IGNORECASE),
+)
+CUSTOMER_MEETING_REQUEST_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(
+        r"\b(?:can\s+we|could\s+we|let'?s|please|need\s+to|want\s+to|would\s+like\s+to)\b.{0,30}"
+        r"\b(?:schedule|set up|arrange|book|have|join|jump on|do)\b.{0,20}"
+        r"\b(?:a\s+|the\s+)?(?:call|meeting|zoom(?: meeting)?|google meet|teams(?: meeting)?|webex)\b",
+        re.IGNORECASE | re.DOTALL,
+    ),
+    re.compile(
+        r"\b(?:request(?:ing)?|asking\s+for)\b.{0,20}\b(?:a\s+|the\s+)?(?:call|meeting|zoom(?: meeting)?)\b",
+        re.IGNORECASE | re.DOTALL,
     ),
 )
 
@@ -1019,6 +1043,70 @@ def _build_customer_comment_response_flag(
         )
 
     return None
+
+
+def _customer_comment_matches_any(
+    text: str,
+    patterns: tuple[re.Pattern[str], ...],
+) -> list[str]:
+    matches: list[str] = []
+    for pattern in patterns:
+        match = pattern.search(text)
+        if match:
+            matches.append(match.group(0))
+    return matches
+
+
+def _build_customer_repeated_pressure_flag(
+    comments: list[dict[str, Any]],
+    requester_id: int | None,
+) -> TicketTroubleFlag | None:
+    if requester_id is None:
+        return None
+
+    pressure_comments: list[dict[str, Any]] = []
+    categories: set[str] = set()
+
+    for comment in sorted(
+        comments,
+        key=lambda c: _parse_iso_datetime(c.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc),
+    ):
+        if not bool(comment.get("public")) or comment.get("author_id") != requester_id:
+            continue
+        text = _comment_text(comment)
+        if not text:
+            continue
+
+        matched = False
+        if _customer_comment_matches_any(text, UNHAPPY_COMMENT_PATTERNS):
+            categories.add("dissatisfaction/frustration")
+            matched = True
+        if _customer_comment_matches_any(text, CUSTOMER_UPDATE_REQUEST_PATTERNS):
+            categories.add("repeat update requests")
+            matched = True
+        if _customer_comment_matches_any(text, CUSTOMER_MEETING_REQUEST_PATTERNS) or _contains_call_mention(text):
+            categories.add("meeting/call requests")
+            matched = True
+        if matched:
+            pressure_comments.append(comment)
+
+    if len(pressure_comments) < 2:
+        return None
+
+    first_at = pressure_comments[0].get("created_at") or "unknown time"
+    latest = pressure_comments[-1]
+    latest_at = latest.get("created_at") or "unknown time"
+    category_summary = ", ".join(sorted(categories))
+    return TicketTroubleFlag(
+        code="customer_repeated_pressure",
+        severity="high",
+        message=(
+            "Customer posted multiple pressure/escalation comments on the ticket. "
+            f"Detected {len(pressure_comments)} customer comments with {category_summary}. "
+            f"Window: {first_at} -> {latest_at}. "
+            f"Latest comment: \"{_comment_snippet(latest)}\""
+        ),
+    )
 
 
 def _build_customer_urgency_flag(
@@ -1799,6 +1887,13 @@ def _build_ticket_trouble_assessment(
     if unhappy_comment_flag is not None:
         flags.append(unhappy_comment_flag)
 
+    customer_repeated_pressure_flag = _build_customer_repeated_pressure_flag(
+        comments=comments,
+        requester_id=requester_id,
+    )
+    if customer_repeated_pressure_flag is not None:
+        flags.append(customer_repeated_pressure_flag)
+
     ticket_report_request_flag = _build_ticket_report_request_flag(
         ticket=ticket,
         comments=comments,
@@ -2045,6 +2140,8 @@ def _build_ticket_trouble_markdown_list(tickets: list[TicketTroubleAssessment]) 
             highlights.append("PROD-NO-RESPONSE")
         if any(flag.code == "customer_unhappy" for flag in ticket.flags):
             highlights.append("CUSTOMER-UNHAPPY")
+        if any(flag.code == "customer_repeated_pressure" for flag in ticket.flags):
+            highlights.append("CUSTOMER-PRESSURE")
         highlight_text = f" | highlights={','.join(highlights)}" if highlights else ""
         lines.append(f"- {ticket_ref} | {subject} | status={status} | risk={ticket.risk_score}{highlight_text}")
     return "\n".join(lines)
@@ -2456,7 +2553,7 @@ def scan_tickets_in_trouble(
 
 @mcp.tool(
     name="scan_crash_tickets_in_trouble",
-    description="Scan all open tickets with a crash-related tag and flag tickets likely in trouble based on QA process checks",
+    description="Scan open non-internal tickets with a crash-related tag and flag tickets likely in trouble based on QA process checks",
     structured_output=True,
 )
 def scan_crash_tickets_in_trouble(
@@ -2495,13 +2592,13 @@ def scan_crash_tickets_in_trouble(
 
     assessments: list[TicketTroubleAssessment] = []
     for ticket in search_result.get("tickets", []):
-        if str(ticket.get("status", "")).lower() in {"solved", "closed"}:
+        if str(ticket.get("status", "")).lower() != "open":
             continue
         ticket_id = ticket.get("id")
         if ticket_id is None:
             continue
         full_ticket = _prepare_ticket_payload(int(ticket_id))
-        if str(full_ticket.get("status", "")).lower() in {"solved", "closed"}:
+        if str(full_ticket.get("status", "")).lower() != "open":
             continue
         comments = zendesk_client.get_ticket_comments(int(ticket_id))
         assessment = _build_ticket_trouble_assessment(

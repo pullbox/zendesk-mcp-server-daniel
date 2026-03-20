@@ -118,17 +118,13 @@ def build_text_search_query(
 def build_tag_scan_query(
     *,
     tag: str,
-    include_solved: bool,
     exclude_internal: bool,
 ) -> str:
     tag_str = str(tag).strip()
     if not tag_str:
         raise ValueError("tag is required")
 
-    query_parts = ["type:ticket", f"tags:{tag_str}"]
-
-    if not include_solved:
-        query_parts.append("status<solved")
+    query_parts = ["type:ticket", f"tags:{tag_str}", "status:open"]
 
     if exclude_internal:
         query_parts.append("-tags:internal")

@@ -295,7 +295,6 @@ class TicketsRepository:
 
         query = build_tag_scan_query(
             tag=tag,
-            include_solved=include_solved,
             exclude_internal=exclude_internal,
         )
         params = {
