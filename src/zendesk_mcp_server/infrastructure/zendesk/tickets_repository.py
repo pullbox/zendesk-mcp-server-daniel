@@ -7,6 +7,7 @@ from typing import Any, Callable, Dict, Optional
 
 from zendesk_mcp_server.infrastructure.zendesk.query_builder import (
     build_get_tickets_search_query,
+    build_tag_scan_query,
     build_solved_tickets_query,
     build_text_search_query,
 )
@@ -277,4 +278,62 @@ class TicketsRepository:
             "has_more": data.get("next_page") is not None,
             "next_page": page + 1 if data.get("next_page") else None,
             "previous_page": page - 1 if page > 1 else None,
+        }
+
+    def search_open_tickets_by_tag(
+        self,
+        *,
+        tag: str,
+        max_results: int,
+        per_page: int,
+        include_solved: bool,
+        exclude_internal: bool,
+        now: datetime,
+    ) -> Dict[str, Any]:
+        per_page = max(1, min(per_page, 100))
+        max_results = max(1, min(max_results, 1000))
+
+        query = build_tag_scan_query(
+            tag=tag,
+            include_solved=include_solved,
+            exclude_internal=exclude_internal,
+        )
+        params = {
+            "query": query,
+            "page": "1",
+            "per_page": str(per_page),
+            "sort_by": "updated_at",
+            "sort_order": "desc",
+        }
+        url = f"{self.base_url}/search.json?{urllib.parse.urlencode(params)}"
+
+        collected: list[Dict[str, Any]] = []
+        total_matches: int | None = None
+        page = 1
+
+        while url and len(collected) < max_results:
+            logger.info("Fetching tag-scan page %s: %s", page, url)
+            data = self._json_get(url)
+            if total_matches is None and isinstance(data.get("count"), int):
+                total_matches = data["count"]
+
+            for item in data.get("results", []):
+                if item.get("result_type") not in (None, "ticket"):
+                    continue
+                collected.append(self._build_ticket_list_item(item, now))
+                if len(collected) >= max_results:
+                    break
+
+            url = data.get("next_page")
+            page += 1
+
+        retrieved_count = len(collected)
+        truncated = bool(url)
+        effective_total_matches = retrieved_count if not truncated else (total_matches if total_matches is not None else retrieved_count)
+        return {
+            "tickets": collected,
+            "query": query,
+            "total_matches": effective_total_matches,
+            "retrieved_count": retrieved_count,
+            "truncated": truncated,
         }

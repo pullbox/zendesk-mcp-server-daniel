@@ -1217,6 +1217,88 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
         self.assertIn("missing_initial_response", flag_codes)
         self.assertFalse(response.root.isError)
 
+    def test_scan_crash_tickets_in_trouble_scans_tagged_tickets_without_created_last_hours_window(self) -> None:
+        search_payload = {
+            "tickets": [
+                {
+                    "id": 9150,
+                    "subject": "ACME | iOS | Crash on startup",
+                    "status": "open",
+                    "priority": "normal",
+                    "created_at": "2026-03-01T10:00:00Z",
+                    "updated_at": "2026-03-20T10:00:00Z",
+                },
+            ],
+            "query": "type:ticket tags:crash_detected status<solved -tags:internal",
+            "total_matches": 1,
+            "retrieved_count": 1,
+            "truncated": False,
+        }
+        full_ticket_payload = {
+            "id": 9150,
+            "subject": "ACME | iOS | Crash on startup",
+            "description": "Production users see a crash on startup.",
+            "status": "open",
+            "priority": "normal",
+            "created_at": "2026-03-01T10:00:00Z",
+            "updated_at": "2026-03-20T10:00:00Z",
+            "requester_id": 1001,
+            "tags": ["crash_detected"],
+            "custom_fields": {
+                "Status With": "support",
+                "Support Stage": "investigation",
+                "Release Stage": "Production",
+            },
+        }
+        comments_payload = [
+            {
+                "author_id": 1001,
+                "public": True,
+                "body": "This is still crashing in production and we are waiting for an update.",
+                "html_body": "<p>This is still crashing in production and we are waiting for an update.</p>",
+                "created_at": "2026-03-20T08:00:00Z",
+                "attachments": [],
+            },
+        ]
+
+        request = CallToolRequest(
+            method="tools/call",
+            params=CallToolRequestParams(
+                name="scan_crash_tickets_in_trouble",
+                arguments={"tag": "crash_detected", "max_results": 50},
+            ),
+        )
+
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        with (
+            patch.object(server_module, "zendesk_client") as mock_client,
+            patch.object(server_module, "_prepare_ticket_payload", return_value=full_ticket_payload),
+        ):
+            mock_client.search_open_tickets_by_tag.return_value = search_payload
+            mock_client.get_ticket_comments.return_value = comments_payload
+
+            handler = server_module.mcp._mcp_server.request_handlers[CallToolRequest]
+            response = asyncio.run(handler(request))
+
+        structured = response.root.structuredContent
+        self.assertEqual(structured["tag"], "crash_detected")
+        self.assertEqual(structured["scanned_count"], 1)
+        self.assertEqual(structured["total_matches"], 1)
+        self.assertEqual(structured["retrieved_count"], 1)
+        self.assertFalse(structured["truncated"])
+        self.assertEqual(structured["tickets"][0]["ticket_id"], 9150)
+        self.assertIn("production_user_impact", [flag["code"] for flag in structured["tickets"][0]["flags"]])
+        mock_client.search_open_tickets_by_tag.assert_called_once_with(
+            tag="crash_detected",
+            max_results=50,
+            per_page=100,
+            include_solved=False,
+            exclude_internal=True,
+        )
+        self.assertFalse(response.root.isError)
+
     def test_scan_tickets_in_trouble_skips_initial_response_flag_when_first_comment_is_internal(self) -> None:
         list_payload = {
             "tickets": [

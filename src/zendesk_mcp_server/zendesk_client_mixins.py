@@ -311,6 +311,34 @@ class ZendeskSearchMixin:
         except Exception as e:
             raise Exception(f"Failed to search tickets by text: {str(e)}")
 
+    def search_open_tickets_by_tag(
+        self,
+        *,
+        tag: str,
+        max_results: int = 250,
+        per_page: int = 100,
+        include_solved: bool = False,
+        exclude_internal: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Search tickets by tag using the Search API, without a created-date window.
+        """
+        try:
+            now = self._current_utc_now()
+            return self.tickets_repository.search_open_tickets_by_tag(
+                tag=tag,
+                max_results=max_results,
+                per_page=per_page,
+                include_solved=include_solved,
+                exclude_internal=exclude_internal,
+                now=now,
+            )
+        except urllib.error.HTTPError as e:
+            error_body = e.read().decode() if e.fp else "No response body"
+            raise Exception(f"Failed to search tickets by tag {tag}: HTTP {e.code} - {e.reason}. {error_body}")
+        except Exception as e:
+            raise Exception(f"Failed to search tickets by tag {tag}: {str(e)}")
+
 
 class ZendeskWriteMixin:
     def post_comment(self, ticket_id: int, comment: str, public: bool = True) -> str:

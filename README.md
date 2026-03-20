@@ -252,6 +252,21 @@ Current flag conditions include:
 - `crash_process_gap`: crash/ANR ticket has neither stacktrace evidence nor an explicit request for crash logs.
 - `late_stacktrace_request`: crash/ANR ticket requested stacktrace evidence more than 60 minutes after ticket creation when evidence was not already present.
 
+### scan_crash_tickets_in_trouble
+
+Scan all open tickets with a crash-related tag and flag likely QA/process issues, without a created-date window.
+
+- Input:
+  - `tag` (default `crash_detected`)
+  - `max_results` (default `250`, max `1000`)
+  - `per_page` (default `100`, max `100`)
+  - `exclude_internal` (default `true`)
+  - `initial_response_sla_minutes` (default `60`)
+  - `high_priority_stale_hours` (default `8`)
+
+- Output:
+  - Structured result with `tag`, `scanned_count`, `in_trouble_count`, `total_matches`, `retrieved_count`, `truncated`, `ticket_list_markdown`, and per-ticket trouble assessments.
+
 ### sample_solved_tickets_for_agent
 
 Randomly sample solved tickets for a specific agent in a date window.

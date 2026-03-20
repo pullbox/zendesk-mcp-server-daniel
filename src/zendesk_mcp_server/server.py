@@ -513,6 +513,17 @@ class ScanTicketsInTroubleResult(BaseModel):
     tickets: list[TicketTroubleAssessment]
 
 
+class ScanCrashTicketsInTroubleResult(BaseModel):
+    tag: str
+    scanned_count: int
+    in_trouble_count: int
+    total_matches: int
+    retrieved_count: int
+    truncated: bool
+    ticket_list_markdown: str = ""
+    tickets: list[TicketTroubleAssessment]
+
+
 DEFAULT_INITIAL_RESPONSE_SLA_MINUTES = 60
 DEFAULT_HIGH_PRIORITY_STALE_HOURS = 8
 PENDING_TICKET_PRIORITY_DISCOUNT = 15
@@ -2438,6 +2449,81 @@ def scan_tickets_in_trouble(
         created_last_hours=created_last_hours,
         scanned_count=len(assessments),
         in_trouble_count=in_trouble_count,
+        ticket_list_markdown=_build_ticket_trouble_markdown_list(assessments),
+        tickets=assessments,
+    )
+
+
+@mcp.tool(
+    name="scan_crash_tickets_in_trouble",
+    description="Scan all open tickets with a crash-related tag and flag tickets likely in trouble based on QA process checks",
+    structured_output=True,
+)
+def scan_crash_tickets_in_trouble(
+    tag: Annotated[
+        str,
+        Field(description="Crash-related tag to scan, e.g. crash_detected."),
+    ] = "crash_detected",
+    max_results: Annotated[
+        int,
+        Field(description="Maximum number of tagged tickets to inspect (max 1000)."),
+    ] = 250,
+    per_page: Annotated[
+        int,
+        Field(description="How many matching tickets to fetch per page from Zendesk search (max 100)."),
+    ] = 100,
+    exclude_internal: Annotated[
+        bool,
+        Field(description="Exclude tickets tagged internal from scan results."),
+    ] = True,
+    initial_response_sla_minutes: Annotated[
+        int,
+        Field(description="SLA threshold for first public agent response in minutes."),
+    ] = DEFAULT_INITIAL_RESPONSE_SLA_MINUTES,
+    high_priority_stale_hours: Annotated[
+        int,
+        Field(description="Threshold in hours for stale escalated high-priority or stale support-owned tickets."),
+    ] = DEFAULT_HIGH_PRIORITY_STALE_HOURS,
+) -> ScanCrashTicketsInTroubleResult:
+    search_result = zendesk_client.search_open_tickets_by_tag(
+        tag=tag,
+        max_results=max_results,
+        per_page=per_page,
+        include_solved=False,
+        exclude_internal=exclude_internal,
+    )
+
+    assessments: list[TicketTroubleAssessment] = []
+    for ticket in search_result.get("tickets", []):
+        if str(ticket.get("status", "")).lower() in {"solved", "closed"}:
+            continue
+        ticket_id = ticket.get("id")
+        if ticket_id is None:
+            continue
+        full_ticket = _prepare_ticket_payload(int(ticket_id))
+        if str(full_ticket.get("status", "")).lower() in {"solved", "closed"}:
+            continue
+        comments = zendesk_client.get_ticket_comments(int(ticket_id))
+        assessment = _build_ticket_trouble_assessment(
+            ticket=full_ticket,
+            comments=comments,
+            initial_response_sla_minutes=initial_response_sla_minutes,
+            high_priority_stale_hours=high_priority_stale_hours,
+        )
+        assessments.append(assessment)
+
+    assessments.sort(
+        key=lambda ticket: (ticket.in_trouble, ticket.risk_score, ticket.ticket_id),
+        reverse=True,
+    )
+    in_trouble_count = len([ticket for ticket in assessments if ticket.in_trouble])
+    return ScanCrashTicketsInTroubleResult(
+        tag=tag,
+        scanned_count=len(assessments),
+        in_trouble_count=in_trouble_count,
+        total_matches=int(search_result.get("total_matches") or len(assessments)),
+        retrieved_count=int(search_result.get("retrieved_count") or len(search_result.get("tickets", []))),
+        truncated=bool(search_result.get("truncated")),
         ticket_list_markdown=_build_ticket_trouble_markdown_list(assessments),
         tickets=assessments,
     )
