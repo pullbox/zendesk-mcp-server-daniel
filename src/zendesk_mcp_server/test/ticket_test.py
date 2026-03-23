@@ -598,6 +598,187 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
         self.assertEqual(json.loads(response.root.content[0].text), expected_payload)
         self.assertFalse(response.root.isError)
 
+    def test_get_important_tickets_today_emits_structured_content(self) -> None:
+        recent_payload = {
+            "tickets": [
+                {"id": 101, "subject": "ACME | Android | Login issue", "status": "open", "priority": "normal"},
+                {"id": 102, "subject": "ACME | iOS | Release blocked", "status": "open", "priority": "high"},
+            ],
+            "count": 2,
+            "page": 1,
+            "per_page": 25,
+            "sort_by": "updated_at",
+            "sort_order": "desc",
+            "filters": {"last_hours": 24, "exclude_internal": True},
+            "has_more": False,
+            "next_page": None,
+            "previous_page": None,
+        }
+        stale_payload = {
+            "tickets": [
+                {"id": 102, "subject": "ACME | iOS | Release blocked", "status": "open", "priority": "high"},
+            ],
+            "count": 1,
+            "page": 1,
+            "per_page": 25,
+            "sort_by": "updated_at",
+            "sort_order": "asc",
+            "filters": {"stale_hours": 8, "exclude_internal": True},
+            "has_more": False,
+            "next_page": None,
+            "previous_page": None,
+        }
+        full_ticket_by_id = {
+            101: {
+                "id": 101,
+                "subject": "ACME | Android | Login issue",
+                "status": "open",
+                "priority": "normal",
+                "created_at": "2026-03-05T10:00:00Z",
+                "updated_at": "2026-03-05T12:00:00Z",
+                "requester_id": 1001,
+                "tags": [],
+                "custom_fields": {
+                    "Status With": "Support Engineer",
+                    "Support Stage": "investigation",
+                    "Release Stage": "UAT",
+                },
+            },
+            102: {
+                "id": 102,
+                "subject": "ACME | iOS | Release blocked",
+                "status": "open",
+                "priority": "high",
+                "created_at": "2026-03-05T10:00:00Z",
+                "updated_at": "2026-03-05T20:00:00Z",
+                "requester_id": 1002,
+                "tags": [],
+                "custom_fields": {
+                    "Status With": "Support Engineer",
+                    "Support Stage": "investigation",
+                    "Release Stage": "PROD",
+                },
+                "stale_age_hours": 10,
+            },
+        }
+        comments_by_id = {
+            101: [
+                {
+                    "author_id": 2002,
+                    "public": True,
+                    "body": "Investigating.",
+                    "html_body": "<p>Investigating.</p>",
+                    "created_at": "2026-03-05T10:15:00Z",
+                    "attachments": [],
+                }
+            ],
+            102: [],
+        }
+        request = CallToolRequest(
+            method="tools/call",
+            params=CallToolRequestParams(
+                name="get_important_tickets_today",
+                arguments={"recent_activity_hours": 24, "stale_hours": 8, "per_page": 25, "exclude_internal": True},
+            ),
+        )
+
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        with (
+            patch.object(server_module, "zendesk_client") as mock_client,
+            patch.object(
+                server_module,
+                "_prepare_ticket_payload",
+                side_effect=lambda ticket_id: full_ticket_by_id[ticket_id],
+            ),
+        ):
+            mock_client.get_tickets.side_effect = [recent_payload, stale_payload]
+            mock_client.get_ticket_comments.side_effect = lambda ticket_id: comments_by_id[ticket_id]
+
+            handler = server_module.mcp._mcp_server.request_handlers[CallToolRequest]
+            response = asyncio.run(handler(request))
+
+        structured = response.root.structuredContent
+        self.assertEqual(structured["filters"]["recent_activity_hours"], 24)
+        self.assertEqual(structured["filters"]["stale_hours"], 8)
+        self.assertEqual(structured["candidate_count"], 2)
+        self.assertEqual(structured["in_trouble_count"], 1)
+        self.assertEqual([ticket["ticket_id"] for ticket in structured["tickets"]], [102, 101])
+        self.assertIn("support_owned_no_recent_updates", [flag["code"] for flag in structured["tickets"][0]["flags"]])
+        self.assertEqual(mock_client.get_tickets.call_count, 2)
+        mock_client.get_tickets.assert_any_call(
+            page=1,
+            per_page=25,
+            sort_by="updated_at",
+            sort_order="desc",
+            agent=None,
+            organization=None,
+            last_hours=24,
+            exclude_internal=True,
+        )
+        mock_client.get_tickets.assert_any_call(
+            page=1,
+            per_page=25,
+            sort_by="updated_at",
+            sort_order="asc",
+            agent=None,
+            organization=None,
+            stale_hours=8,
+            exclude_internal=True,
+        )
+        self.assertFalse(response.root.isError)
+
+    def test_get_important_tickets_today_deduplicates_candidates(self) -> None:
+        shared_ticket = {"id": 101, "subject": "ACME | Android | Login issue", "status": "open", "priority": "normal"}
+        request = CallToolRequest(
+            method="tools/call",
+            params=CallToolRequestParams(
+                name="get_important_tickets_today",
+                arguments={"recent_activity_hours": 24, "stale_hours": 8, "per_page": 25},
+            ),
+        )
+
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        with (
+            patch.object(server_module, "zendesk_client") as mock_client,
+            patch.object(
+                server_module,
+                "_prepare_ticket_payload",
+                return_value={
+                    "id": 101,
+                    "subject": "ACME | Android | Login issue",
+                    "status": "open",
+                    "priority": "normal",
+                    "created_at": "2026-03-05T10:00:00Z",
+                    "updated_at": "2026-03-05T10:20:00Z",
+                    "requester_id": 1001,
+                    "tags": [],
+                    "custom_fields": {
+                        "Status With": "customer",
+                        "Support Stage": "investigation",
+                        "Release Stage": "UAT",
+                    },
+                },
+            ) as mock_prepare_ticket_payload,
+        ):
+            mock_client.get_tickets.side_effect = [
+                {"tickets": [shared_ticket]},
+                {"tickets": [shared_ticket]},
+            ]
+            mock_client.get_ticket_comments.return_value = []
+
+            handler = server_module.mcp._mcp_server.request_handlers[CallToolRequest]
+            response = asyncio.run(handler(request))
+
+        structured = response.root.structuredContent
+        self.assertEqual(structured["candidate_count"], 1)
+        mock_prepare_ticket_payload.assert_called_once_with(101)
+        mock_client.get_ticket_comments.assert_called_once_with(101)
+        self.assertFalse(response.root.isError)
+
     def test_scan_tickets_in_trouble_excludes_resolved_tickets_from_scan(self) -> None:
         list_payload = {
             "tickets": [

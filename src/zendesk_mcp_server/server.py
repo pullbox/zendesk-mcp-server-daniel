@@ -524,6 +524,22 @@ class ScanCrashTicketsInTroubleResult(BaseModel):
     tickets: list[TicketTroubleAssessment]
 
 
+class ImportantTodayFilters(BaseModel):
+    agent: str | None = None
+    organization: str | None = None
+    recent_activity_hours: int
+    stale_hours: int
+    exclude_internal: bool = True
+
+
+class GetImportantTicketsTodayResult(BaseModel):
+    filters: ImportantTodayFilters
+    candidate_count: int
+    in_trouble_count: int
+    ticket_list_markdown: str = ""
+    tickets: list[TicketTroubleAssessment]
+
+
 DEFAULT_INITIAL_RESPONSE_SLA_MINUTES = 60
 DEFAULT_HIGH_PRIORITY_STALE_HOURS = 8
 PENDING_TICKET_PRIORITY_DISCOUNT = 15
@@ -2147,6 +2163,16 @@ def _build_ticket_trouble_markdown_list(tickets: list[TicketTroubleAssessment]) 
     return "\n".join(lines)
 
 
+def _sort_ticket_assessments_by_importance(
+    assessments: list[TicketTroubleAssessment],
+) -> list[TicketTroubleAssessment]:
+    return sorted(
+        assessments,
+        key=lambda ticket: (ticket.in_trouble, ticket.risk_score, ticket.ticket_id),
+        reverse=True,
+    )
+
+
 @mcp.prompt(name="analyze-ticket", description="Analyze a Zendesk ticket and provide insights")
 def analyze_ticket_prompt(
     ticket_id: Annotated[int, Field(description="The ID of the ticket to analyze")],
@@ -2537,10 +2563,7 @@ def scan_tickets_in_trouble(
                 continue
         assessments.append(assessment)
 
-    assessments.sort(
-        key=lambda ticket: (ticket.in_trouble, ticket.risk_score, ticket.ticket_id),
-        reverse=True,
-    )
+    assessments = _sort_ticket_assessments_by_importance(assessments)
     in_trouble_count = len([ticket for ticket in assessments if ticket.in_trouble])
     return ScanTicketsInTroubleResult(
         created_last_hours=created_last_hours,
@@ -2609,10 +2632,7 @@ def scan_crash_tickets_in_trouble(
         )
         assessments.append(assessment)
 
-    assessments.sort(
-        key=lambda ticket: (ticket.in_trouble, ticket.risk_score, ticket.ticket_id),
-        reverse=True,
-    )
+    assessments = _sort_ticket_assessments_by_importance(assessments)
     in_trouble_count = len([ticket for ticket in assessments if ticket.in_trouble])
     return ScanCrashTicketsInTroubleResult(
         tag=tag,
@@ -2621,6 +2641,117 @@ def scan_crash_tickets_in_trouble(
         total_matches=int(search_result.get("total_matches") or len(assessments)),
         retrieved_count=int(search_result.get("retrieved_count") or len(search_result.get("tickets", []))),
         truncated=bool(search_result.get("truncated")),
+        ticket_list_markdown=_build_ticket_trouble_markdown_list(assessments),
+        tickets=assessments,
+    )
+
+
+@mcp.tool(
+    name="get_important_tickets_today",
+    description=(
+        "Find tickets that matter today based on recent activity or stale follow-up risk, "
+        "then rank them with the ticket trouble assessment"
+    ),
+    structured_output=True,
+)
+def get_important_tickets_today(
+    recent_activity_hours: Annotated[
+        int,
+        Field(description="Include tickets updated in the last N hours, regardless of when they were created."),
+    ] = 24,
+    stale_hours: Annotated[
+        int,
+        Field(description="Also include tickets that have not been updated in the last N hours."),
+    ] = DEFAULT_HIGH_PRIORITY_STALE_HOURS,
+    per_page: Annotated[
+        int,
+        Field(description="Maximum tickets to fetch from each candidate query (max 100)."),
+    ] = 50,
+    agent: Annotated[
+        str | None,
+        Field(description="Optional assignee filter. Can be agent id, email, or name."),
+    ] = None,
+    organization: Annotated[
+        str | None,
+        Field(description="Optional organization name filter."),
+    ] = None,
+    exclude_internal: Annotated[
+        bool,
+        Field(description="Exclude tickets tagged internal from scan results."),
+    ] = True,
+    initial_response_sla_minutes: Annotated[
+        int,
+        Field(description="SLA threshold for first public agent response in minutes."),
+    ] = DEFAULT_INITIAL_RESPONSE_SLA_MINUTES,
+    high_priority_stale_hours: Annotated[
+        int,
+        Field(description="Threshold in hours for stale escalated high-priority or stale support-owned tickets."),
+    ] = DEFAULT_HIGH_PRIORITY_STALE_HOURS,
+) -> GetImportantTicketsTodayResult:
+    bounded_per_page = min(per_page, 100)
+    recent_result = zendesk_client.get_tickets(
+        page=1,
+        per_page=bounded_per_page,
+        sort_by="updated_at",
+        sort_order="desc",
+        agent=agent,
+        organization=organization,
+        last_hours=recent_activity_hours,
+        exclude_internal=exclude_internal,
+    )
+    stale_result = zendesk_client.get_tickets(
+        page=1,
+        per_page=bounded_per_page,
+        sort_by="updated_at",
+        sort_order="asc",
+        agent=agent,
+        organization=organization,
+        stale_hours=stale_hours,
+        exclude_internal=exclude_internal,
+    )
+
+    candidate_ticket_ids: list[int] = []
+    seen_ticket_ids: set[int] = set()
+    for result in (recent_result, stale_result):
+        for ticket in result.get("tickets", []):
+            ticket_id = ticket.get("id")
+            if ticket_id is None:
+                continue
+            normalized_ticket_id = int(ticket_id)
+            if normalized_ticket_id in seen_ticket_ids:
+                continue
+            seen_ticket_ids.add(normalized_ticket_id)
+            candidate_ticket_ids.append(normalized_ticket_id)
+
+    assessments: list[TicketTroubleAssessment] = []
+    for ticket_id in candidate_ticket_ids:
+        full_ticket = _prepare_ticket_payload(ticket_id)
+        if str(full_ticket.get("status", "")).lower() in {"solved", "closed"}:
+            continue
+        if _is_feature_request_ticket(full_ticket.get("subject")):
+            continue
+        comments = zendesk_client.get_ticket_comments(ticket_id)
+        assessments.append(
+            _build_ticket_trouble_assessment(
+                ticket=full_ticket,
+                comments=comments,
+                initial_response_sla_minutes=initial_response_sla_minutes,
+                high_priority_stale_hours=high_priority_stale_hours,
+            )
+        )
+
+    assessments = _sort_ticket_assessments_by_importance(assessments)
+    in_trouble_count = len([ticket for ticket in assessments if ticket.in_trouble])
+    return GetImportantTicketsTodayResult(
+        filters=ImportantTodayFilters(
+            agent=agent,
+            organization=organization,
+            recent_activity_hours=recent_activity_hours,
+            stale_hours=stale_hours,
+            exclude_internal=exclude_internal,
+        ),
+        candidate_count=len(assessments),
+        in_trouble_count=in_trouble_count,
         ticket_list_markdown=_build_ticket_trouble_markdown_list(assessments),
         tickets=assessments,
     )
