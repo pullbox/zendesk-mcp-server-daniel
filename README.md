@@ -195,6 +195,60 @@ Fetch ticket list with pagination and optional filters.
   - Structured result (`structured_output=True`) with ticket list + pagination + optional `filters`.
   - Each ticket includes stale age fields: `stale_age_hours`, `stale_age_days`.
 
+### get_important_tickets_today
+
+Find tickets that matter today based on current attention needs, not just creation time.
+
+- What it does:
+  - fetches tickets updated in the last `recent_activity_hours`
+  - fetches stale tickets older than `stale_hours`
+  - de-duplicates the combined candidate set
+  - runs the existing ticket trouble assessment on each candidate
+  - returns a ranked structured list of tickets that are most likely to need attention now
+
+- Input:
+  - `recent_activity_hours` (integer, optional): Include tickets updated in the last N hours. Default `24`
+  - `stale_hours` (integer, optional): Also include tickets not updated in the last N hours. Default `8`
+  - `per_page` (integer, optional): Max tickets to fetch from each candidate query, max `100`. Default `50`
+  - `agent` (string, optional): Assignee filter. Can be an id, email, or name
+  - `organization` (string, optional): Organization name filter
+  - `exclude_internal` (boolean, optional): Exclude tickets tagged `internal`. Default `true`
+  - `initial_response_sla_minutes` (integer, optional): SLA threshold for first public agent response. Default `60`
+  - `high_priority_stale_hours` (integer, optional): Trouble-assessment threshold for stale escalated high-priority or stale support-owned tickets. Default `8`
+
+- Output:
+  - Structured result with:
+    - `filters`
+    - `candidate_count`
+    - `in_trouble_count`
+    - `ticket_list_markdown`
+    - `tickets`
+  - Each ticket is returned as a `TicketTroubleAssessment`, including:
+    - `ticket_id`, `ticket_url`, `ticket_link`
+    - `subject`, `status`, `priority`
+    - `is_escalated`
+    - `priority_interpretation`
+    - `in_trouble`
+    - `risk_score`
+    - `flags`
+    - `production_impact`
+    - `crash_attachment_summary`
+    - recent comment notes
+
+- Recommended call:
+
+```json
+{
+  "name": "get_important_tickets_today",
+  "arguments": {
+    "recent_activity_hours": 24,
+    "stale_hours": 8,
+    "per_page": 50,
+    "exclude_internal": true
+  }
+}
+```
+
 ### search_tickets_by_text
 
 Search ticket content by phrase, with optional narrowing.
