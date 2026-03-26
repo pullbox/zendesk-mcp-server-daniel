@@ -1003,15 +1003,16 @@ def _build_customer_comment_response_flag(
             continue
 
         if _is_no_response_expected_comment(customer_comment):
-            has_any_later_public_comment = any(
+            has_any_later_appdome_comment = any(
                 (_parse_iso_datetime(possible_reply.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc))
                 > customer_time
-                for possible_reply in public_comments_sorted
+                and _is_non_customer_follow_up_comment(possible_reply, requester_id)
+                for possible_reply in comments
             )
             if (
                 status in OPEN_TICKET_STATUSES
                 and (reference_time - customer_time) > timedelta(days=NO_RESPONSE_EXPECTED_OPEN_STALE_DAYS)
-                and not has_any_later_public_comment
+                and not has_any_later_appdome_comment
             ):
                 return TicketTroubleFlag(
                     code="customer_comment_no_response",
@@ -1019,17 +1020,17 @@ def _build_customer_comment_response_flag(
                     message=(
                         "Ticket stayed open more than "
                         f"{NO_RESPONSE_EXPECTED_OPEN_STALE_DAYS} days after a no-response-expected "
-                        "customer update, with no later public comments."
+                        "customer update, with no later Appdome follow-up."
                     ),
                 )
             continue
 
         first_follow_up_after_customer: datetime | None = None
-        for possible_reply in public_comments_sorted:
+        for possible_reply in comments:
             reply_time = _parse_iso_datetime(possible_reply.get("created_at"))
             if reply_time is None or reply_time <= customer_time:
                 continue
-            if possible_reply.get("author_id") == requester_id:
+            if not _is_non_customer_follow_up_comment(possible_reply, requester_id):
                 continue
             first_follow_up_after_customer = reply_time
             break
@@ -1049,8 +1050,8 @@ def _build_customer_comment_response_flag(
                 code="production_customer_comment_no_response",
                 severity="high",
                 message=(
-                    "Production-impact customer comment is still waiting on a public Appdome response. "
-                    f"No public reply within {follow_up_sla_hours}h; waiting about {delay_hours}h. "
+                    "Production-impact customer comment is still waiting on an Appdome follow-up. "
+                    f"No Appdome reply or internal follow-up within {follow_up_sla_hours}h; waiting about {delay_hours}h. "
                     f"Comment: \"{snippet}\""
                 ),
             )
@@ -1059,7 +1060,7 @@ def _build_customer_comment_response_flag(
             code="customer_comment_no_response",
             severity="high",
             message=(
-                "Customer public comment did not receive a public Appdome response "
+                "Customer public comment did not receive an Appdome follow-up "
                 f"within {follow_up_sla_hours}h; waiting about {delay_hours}h. "
                 f"Comment: \"{snippet}\""
             ),
@@ -1423,6 +1424,10 @@ def _extract_meeting_scheduled_at(text: str, fallback_year: int | None = None) -
 
 def _is_agent_comment(comment: dict[str, Any], requester_id: int | None) -> bool:
     return not (requester_id is not None and comment.get("author_id") == requester_id)
+
+
+def _is_non_customer_follow_up_comment(comment: dict[str, Any], requester_id: int | None) -> bool:
+    return _is_agent_comment(comment, requester_id)
 
 
 def _is_meeting_summary_comment(

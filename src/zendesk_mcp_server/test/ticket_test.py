@@ -2397,6 +2397,100 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
         self.assertGreaterEqual(ticket["risk_score"], 56)
         self.assertFalse(response.root.isError)
 
+    def test_scan_tickets_in_trouble_accepts_internal_appdome_follow_up_after_customer_comment(self) -> None:
+        list_payload = {
+            "tickets": [
+                {
+                    "id": 902,
+                    "subject": "ACME | Android | Crash on launch",
+                    "status": "open",
+                    "priority": "high",
+                },
+            ],
+            "count": 1,
+            "page": 1,
+            "per_page": 25,
+            "sort_by": "created_at",
+            "sort_order": "desc",
+            "filters": {
+                "created_last_hours": 4,
+                "exclude_internal": True,
+            },
+            "has_more": False,
+            "next_page": None,
+            "previous_page": None,
+        }
+        full_ticket_payload = {
+            "id": 902,
+            "subject": "ACME | Android | Crash on launch",
+            "status": "open",
+            "priority": "high",
+            "created_at": "2026-03-05T09:00:00Z",
+            "updated_at": "2026-03-05T15:30:00Z",
+            "requester_id": 1001,
+            "tags": ["crash_detected", "prod_impact"],
+            "custom_fields": {
+                "Status With": "support",
+                "Support Stage": "investigation",
+                "Release Stage": "production",
+            },
+        }
+        comments_payload = [
+            {
+                "author_id": 2002,
+                "public": True,
+                "body": "We are investigating this crash.",
+                "html_body": "<p>We are investigating this crash.</p>",
+                "created_at": "2026-03-05T09:10:00Z",
+                "attachments": [],
+            },
+            {
+                "author_id": 1001,
+                "public": True,
+                "body": "This is impacting production users. We are still waiting for an Appdome response.",
+                "html_body": "<p>This is impacting production users. We are still waiting for an Appdome response.</p>",
+                "created_at": "2026-03-05T11:00:00Z",
+                "attachments": [],
+            },
+            {
+                "author_id": 3003,
+                "public": False,
+                "body": "Got it. Engineering is looking at this now.",
+                "html_body": "<p>Got it. Engineering is looking at this now.</p>",
+                "created_at": "2026-03-05T11:15:00Z",
+                "attachments": [],
+            },
+        ]
+
+        request = CallToolRequest(
+            method="tools/call",
+            params=CallToolRequestParams(
+                name="scan_tickets_in_trouble",
+                arguments={"created_last_hours": 4, "per_page": 25},
+            ),
+        )
+
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        with (
+            patch.object(server_module, "zendesk_client") as mock_client,
+            patch.object(server_module, "_prepare_ticket_payload", return_value=full_ticket_payload),
+        ):
+            mock_client.get_tickets.return_value = list_payload
+            mock_client.get_ticket_comments.return_value = comments_payload
+
+            handler = server_module.mcp._mcp_server.request_handlers[CallToolRequest]
+            response = asyncio.run(handler(request))
+
+        structured = response.root.structuredContent
+        ticket = structured["tickets"][0]
+        flag_codes = [flag["code"] for flag in ticket["flags"]]
+        self.assertNotIn("production_customer_comment_no_response", flag_codes)
+        self.assertNotIn("customer_comment_no_response", flag_codes)
+        self.assertNotIn("PROD-NO-RESPONSE", structured["ticket_list_markdown"])
+        self.assertFalse(response.root.isError)
+
     def test_scan_tickets_in_trouble_ignores_no_response_expected_customer_comment(self) -> None:
         list_payload = {
             "tickets": [

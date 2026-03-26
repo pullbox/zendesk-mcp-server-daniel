@@ -297,7 +297,7 @@ Scan non-solved tickets created in the last N hours and flag likely QA/process i
   - required status/custom-field completeness
 - late or missing initial public response
 - scheduled/requested meetings without later public SDE call-summary notes
-- customer public comment without timely follow-up
+- customer public comment without timely Appdome follow-up
   - solved/closed tickets without explicit customer confirmation
   - stale high-priority escalations and stale support-owned tickets
 
@@ -308,7 +308,7 @@ Current flag conditions include:
 - `missing_initial_response`: no public agent reply after the configured first-response SLA, unless the first comment was internal.
 - `late_initial_response`: first public agent reply exceeded the configured first-response SLA.
 - `meeting_summary_missing`: a meeting/call was requested or scheduled, but no later summary notes from the assigned SDE/agent were found after the meeting should have occurred. Public comments and private/internal notes both count.
-- `customer_comment_no_response`: a customer public comment did not receive a public agent follow-up within the configured SLA; also used when a ticket stays open for days after a customer says no response is needed.
+- `customer_comment_no_response`: a customer public comment did not receive an Appdome follow-up within the configured SLA. Public replies and private/internal Appdome notes both count. Also used when a ticket stays open for days after a customer says no response is needed.
 - `solved_without_customer_confirmation`: ticket is solved/closed without explicit customer confirmation in public comments.
 - `high_priority_no_recent_updates`: escalated `high`/`urgent` ticket has been stale longer than the configured threshold.
 - `support_owned_no_recent_updates`: non-escalated support-owned ticket has been stale longer than the configured threshold.
