@@ -267,6 +267,17 @@ Search ticket content by phrase, with optional narrowing.
 
 - Output:
   - Structured result with tickets, built search query string, filters, and pagination fields.
+  - Each returned ticket includes `match_type`:
+    - `exact` for the quoted phrase search
+    - `partial` when the exact search returned 0 and the server fell back to a broader token search
+  - Search metadata includes:
+    - `exact_query`
+    - `partial_query`
+    - `search_mode`
+    - `exact_count`
+    - `partial_fallback_used`
+    - `partial_fallback_reason`
+  - Partial fallback is intentionally skipped for very short/common phrases so searches like `to` do not return an unhelpful flood of tickets.
 
 ### scan_tickets_in_trouble
 

@@ -431,6 +431,10 @@ class TestGetTicketsLastFiveHours(unittest.TestCase):
         self.assertEqual(params["per_page"][0], "25")
         self.assertEqual(result["count"], 1)
         self.assertEqual(result["tickets"][0]["id"], 501)
+        self.assertEqual(result["tickets"][0]["match_type"], "exact")
+        self.assertEqual(result["exact_query"], query)
+        self.assertFalse(result["partial_fallback_used"])
+        self.assertEqual(result["search_mode"], "exact")
 
     def test_search_tickets_by_text_excludes_solved_by_default(self) -> None:
         api_payload = {"results": [], "next_page": None}
@@ -515,6 +519,64 @@ class TestGetTicketsLastFiveHours(unittest.TestCase):
         query = unquote(params["query"][0])
 
         self.assertIn("commenter:4002", query)
+
+    def test_search_tickets_by_text_uses_partial_fallback_after_zero_exact_matches(self) -> None:
+        exact_payload = {"results": [], "next_page": None}
+        partial_payload = {
+            "results": [
+                {
+                    "result_type": "ticket",
+                    "id": 777,
+                    "subject": "Facephi SDK issue",
+                    "status": "open",
+                    "priority": "normal",
+                    "created_at": "2026-03-01T10:00:00Z",
+                    "updated_at": "2026-03-02T10:00:00Z",
+                }
+            ],
+            "next_page": None,
+        }
+
+        mock_response_one = MagicMock()
+        mock_response_one.read.return_value = json.dumps(exact_payload).encode("utf-8")
+        mock_response_two = MagicMock()
+        mock_response_two.read.return_value = json.dumps(partial_payload).encode("utf-8")
+        mock_urlopen = MagicMock()
+        mock_urlopen.return_value.__enter__.side_effect = [mock_response_one, mock_response_two]
+
+        with patch("zendesk_mcp_server.zendesk_client.urllib.request.urlopen", mock_urlopen):
+            result = self.client.search_tickets_by_text(phrase="Facephi SDK")
+
+        first_request = mock_urlopen.call_args_list[0].args[0]
+        first_query = unquote(parse_qs(urlparse(first_request.full_url).query)["query"][0])
+        second_request = mock_urlopen.call_args_list[1].args[0]
+        second_query = unquote(parse_qs(urlparse(second_request.full_url).query)["query"][0])
+
+        self.assertEqual(first_query, 'type:ticket "Facephi SDK" status<solved')
+        self.assertEqual(second_query, "type:ticket Facephi status<solved")
+        self.assertEqual(result["tickets"][0]["match_type"], "partial")
+        self.assertEqual(result["search_mode"], "partial_fallback")
+        self.assertEqual(result["exact_count"], 0)
+        self.assertTrue(result["partial_fallback_used"])
+        self.assertEqual(result["partial_query"], second_query)
+        self.assertIsNone(result["partial_fallback_reason"])
+
+    def test_search_tickets_by_text_skips_partial_fallback_for_common_short_phrase(self) -> None:
+        api_payload = {"results": [], "next_page": None}
+
+        mock_response = MagicMock()
+        mock_response.read.return_value = json.dumps(api_payload).encode("utf-8")
+        mock_urlopen = MagicMock()
+        mock_urlopen.return_value.__enter__.return_value = mock_response
+
+        with patch("zendesk_mcp_server.zendesk_client.urllib.request.urlopen", mock_urlopen):
+            result = self.client.search_tickets_by_text(phrase="to")
+
+        self.assertEqual(len(mock_urlopen.call_args_list), 1)
+        self.assertEqual(result["search_mode"], "exact_no_partial_fallback")
+        self.assertFalse(result["partial_fallback_used"])
+        self.assertEqual(result["partial_query"], None)
+        self.assertEqual(result["partial_fallback_reason"], "phrase is too short or too common for safe partial fallback")
 
 
 class TestServerGetTicketsLastFiveHours(unittest.TestCase):
@@ -4283,13 +4345,19 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
 
     def test_search_tickets_by_text_tool_emits_structured_content(self) -> None:
         client_payload = {
-            "tickets": [{"id": 501, "subject": "Facephi issue"}],
+            "tickets": [{"id": 501, "subject": "Facephi issue", "match_type": "exact"}],
             "page": 1,
             "per_page": 25,
             "count": 1,
             "sort_by": "updated_at",
             "sort_order": "desc",
             "query": 'type:ticket "Facephi" commenter:"Tom"',
+            "exact_query": 'type:ticket "Facephi" commenter:"Tom"',
+            "partial_query": None,
+            "search_mode": "exact",
+            "exact_count": 1,
+            "partial_fallback_used": False,
+            "partial_fallback_reason": None,
             "filters": {
                 "phrase": "Facephi",
                 "organization": None,

@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any, Callable, Dict, Optional
 
 from zendesk_mcp_server.infrastructure.zendesk.query_builder import (
+    build_partial_text_search_query,
     build_get_tickets_search_query,
     build_tag_scan_query,
     build_solved_tickets_query,
@@ -28,6 +29,39 @@ class TicketsRepository:
         self._json_get = json_get
         self._build_ticket_list_item = build_ticket_list_item
         self._timestamp_formatter = timestamp_formatter
+
+    def _search_ticket_items(
+        self,
+        *,
+        query: str,
+        page: int,
+        per_page: int,
+        sort_by: str,
+        sort_order: str,
+        now: datetime,
+        match_type: str,
+    ) -> tuple[list[Dict[str, Any]], Dict[str, Any]]:
+        params = {
+            "query": query,
+            "page": str(page),
+            "per_page": str(per_page),
+            "sort_by": sort_by,
+            "sort_order": sort_order,
+        }
+        url = f"{self.base_url}/search.json?{urllib.parse.urlencode(params)}"
+
+        logger.info("Searching tickets by text via search API: %s", url)
+        data = self._json_get(url)
+
+        ticket_list: list[Dict[str, Any]] = []
+        for item in data.get("results", []):
+            if item.get("result_type") not in (None, "ticket"):
+                continue
+            ticket_item = self._build_ticket_list_item(item, now)
+            ticket_item["match_type"] = match_type
+            ticket_list.append(ticket_item)
+
+        return ticket_list, data
 
     def get_tickets(
         self,
@@ -229,7 +263,7 @@ class TicketsRepository:
     ) -> Dict[str, Any]:
         per_page = max(1, min(per_page, 100))
 
-        query = build_text_search_query(
+        exact_query = build_text_search_query(
             phrase=phrase,
             organization=organization,
             updated_since=updated_since,
@@ -239,23 +273,49 @@ class TicketsRepository:
             exclude_internal=exclude_internal,
             comment_author=comment_author,
         )
-        params = {
-            "query": query,
-            "page": str(page),
-            "per_page": str(per_page),
-            "sort_by": sort_by,
-            "sort_order": sort_order,
-        }
-        url = f"{self.base_url}/search.json?{urllib.parse.urlencode(params)}"
+        ticket_list, data = self._search_ticket_items(
+            query=exact_query,
+            page=page,
+            per_page=per_page,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            now=now,
+            match_type="exact",
+        )
 
-        logger.info("Searching tickets by text via search API: %s", url)
-        data = self._json_get(url)
+        partial_query = None
+        partial_fallback_used = False
+        partial_fallback_reason = None
+        search_mode = "exact"
+        exact_count = len(ticket_list)
 
-        ticket_list = [
-            self._build_ticket_list_item(item, now)
-            for item in data.get("results", [])
-            if item.get("result_type") in (None, "ticket")
-        ]
+        if exact_count == 0:
+            partial_query, partial_fallback_reason = build_partial_text_search_query(
+                phrase=phrase,
+                organization=organization,
+                updated_since=updated_since,
+                updated_before=updated_before,
+                status=status,
+                include_solved=include_solved,
+                exclude_internal=exclude_internal,
+                comment_author=comment_author,
+            )
+            if partial_query:
+                partial_ticket_list, partial_data = self._search_ticket_items(
+                    query=partial_query,
+                    page=page,
+                    per_page=per_page,
+                    sort_by=sort_by,
+                    sort_order=sort_order,
+                    now=now,
+                    match_type="partial",
+                )
+                ticket_list = partial_ticket_list
+                data = partial_data
+                partial_fallback_used = True
+                search_mode = "partial_fallback"
+            else:
+                search_mode = "exact_no_partial_fallback"
 
         return {
             "tickets": ticket_list,
@@ -264,7 +324,13 @@ class TicketsRepository:
             "count": len(ticket_list),
             "sort_by": sort_by,
             "sort_order": sort_order,
-            "query": query,
+            "query": partial_query if partial_fallback_used and partial_query else exact_query,
+            "exact_query": exact_query,
+            "partial_query": partial_query,
+            "search_mode": search_mode,
+            "exact_count": exact_count,
+            "partial_fallback_used": partial_fallback_used,
+            "partial_fallback_reason": partial_fallback_reason,
             "filters": {
                 "phrase": str(phrase).strip(),
                 "organization": organization,

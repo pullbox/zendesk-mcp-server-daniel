@@ -340,6 +340,7 @@ class TicketItem(BaseModel):
     updated_at: str | None = None
     stale_age_hours: int | None = None
     stale_age_days: int | None = None
+    match_type: str | None = None
 
 
 class TicketFilters(BaseModel):
@@ -411,6 +412,12 @@ class SearchTicketsByTextResult(BaseModel):
     sort_by: str
     sort_order: str
     query: str
+    exact_query: str
+    partial_query: str | None = None
+    search_mode: str = "exact"
+    exact_count: int = 0
+    partial_fallback_used: bool = False
+    partial_fallback_reason: str | None = None
     filters: SearchTicketsByTextFilters
     has_more: bool
     next_page: int | None = None
