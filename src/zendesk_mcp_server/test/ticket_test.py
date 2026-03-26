@@ -1,7 +1,6 @@
 import asyncio
 import importlib
 import json
-import os
 import sys
 import unittest
 from datetime import datetime, timezone
@@ -1944,6 +1943,81 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
         self.assertIn("14:30", joined_notes)
         self.assertFalse(response.root.isError)
 
+    def test_scan_tickets_in_trouble_includes_last_ten_comments_as_context(self) -> None:
+        list_payload = {
+            "tickets": [
+                {"id": 9121, "subject": "ACME | iOS | Login issue", "status": "open", "priority": "normal"},
+            ],
+            "count": 1,
+            "page": 1,
+            "per_page": 25,
+            "sort_by": "created_at",
+            "sort_order": "desc",
+            "filters": {
+                "created_last_hours": 4,
+                "exclude_internal": True,
+            },
+            "has_more": False,
+            "next_page": None,
+            "previous_page": None,
+        }
+        full_ticket_payload = {
+            "id": 9121,
+            "subject": "ACME | iOS | Login issue",
+            "status": "open",
+            "priority": "normal",
+            "created_at": "2026-03-05T10:00:00Z",
+            "updated_at": "2026-03-05T12:30:00Z",
+            "requester_id": 1001,
+            "tags": [],
+            "custom_fields": {
+                "Status With": "customer",
+                "Support Stage": "investigation",
+                "Release Stage": "n/a",
+            },
+        }
+        comments_payload = [
+            {
+                "author_id": 1001 if index % 2 else 2002,
+                "public": bool(index % 3),
+                "body": f"Comment {index}",
+                "html_body": f"<p>Comment {index}</p>",
+                "created_at": f"2026-03-05T10:{index:02d}:00Z",
+                "attachments": [],
+            }
+            for index in range(12)
+        ]
+
+        request = CallToolRequest(
+            method="tools/call",
+            params=CallToolRequestParams(
+                name="scan_tickets_in_trouble",
+                arguments={"created_last_hours": 4, "per_page": 25},
+            ),
+        )
+
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        with (
+            patch.object(server_module, "zendesk_client") as mock_client,
+            patch.object(server_module, "_prepare_ticket_payload", return_value=full_ticket_payload),
+        ):
+            mock_client.get_tickets.return_value = list_payload
+            mock_client.get_ticket_comments.return_value = comments_payload
+
+            handler = server_module.mcp._mcp_server.request_handlers[CallToolRequest]
+            response = asyncio.run(handler(request))
+
+        structured = response.root.structuredContent
+        comment_context = structured["tickets"][0]["comment_context"]
+        self.assertEqual(len(comment_context), 10)
+        self.assertEqual(comment_context[0]["snippet"], "Comment 2 Comment 2")
+        self.assertEqual(comment_context[-1]["snippet"], "Comment 11 Comment 11")
+        self.assertEqual(comment_context[0]["created_at"], "2026-03-05T10:02:00Z")
+        self.assertEqual(comment_context[-1]["created_at"], "2026-03-05T10:11:00Z")
+        self.assertFalse(response.root.isError)
+
     def test_scan_tickets_in_trouble_flags_missing_public_meeting_summary_from_assignee(self) -> None:
         list_payload = {
             "tickets": [
@@ -2933,92 +3007,6 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
 
         flag_codes = [flag.code for flag in assessment.flags]
         self.assertNotIn("solved_without_customer_confirmation", flag_codes)
-
-    def test_customer_acknowledgement_uses_llm_intent_classifier_when_configured(self) -> None:
-        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
-            server_module = importlib.import_module("zendesk_mcp_server.server")
-
-        comment = {
-            "author_id": 1001,
-            "public": True,
-            "body": "Thanks for the analysis and identifying the issue.",
-            "html_body": "<p>Thanks for the analysis and identifying the issue.</p>",
-            "created_at": "2026-03-05T10:30:00Z",
-            "attachments": [],
-        }
-        response_payload = {
-            "output": [
-                {
-                    "type": "message",
-                    "content": [
-                        {
-                            "type": "output_text",
-                            "text": '{"is_resolution_acknowledgement": true}',
-                        }
-                    ],
-                }
-            ]
-        }
-        mock_response = MagicMock()
-        mock_response.read.return_value = json.dumps(response_payload).encode("utf-8")
-        mock_urlopen = MagicMock()
-        mock_urlopen.return_value.__enter__.return_value = mock_response
-
-        with (
-            patch.dict(
-                os.environ,
-                {
-                    "COMMENT_INTENT_CLASSIFIER_MODE": "llm",
-                    "OPENAI_API_KEY": "test-key",
-                    "OPENAI_COMMENT_CLASSIFIER_MODEL": "test-model",
-                },
-                clear=False,
-            ),
-            patch("zendesk_mcp_server.server.urllib.request.urlopen", mock_urlopen),
-        ):
-            server_module._classify_customer_comment_intent_with_llm.cache_clear()
-            result = server_module._customer_comment_indicates_resolution_acknowledgement(comment)
-
-        self.assertTrue(result)
-        request = mock_urlopen.call_args.args[0]
-        request_payload = json.loads(request.data.decode("utf-8"))
-        self.assertEqual(request_payload["model"], "test-model")
-        self.assertEqual(
-            request_payload["text"]["format"]["name"],
-            "customer_comment_intent",
-        )
-
-    def test_customer_acknowledgement_falls_back_to_heuristic_when_llm_unavailable(self) -> None:
-        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
-            server_module = importlib.import_module("zendesk_mcp_server.server")
-
-        comment = {
-            "author_id": 1001,
-            "public": True,
-            "body": "Thanks for the analysis and identifying the issue.",
-            "html_body": "<p>Thanks for the analysis and identifying the issue.</p>",
-            "created_at": "2026-03-05T10:30:00Z",
-            "attachments": [],
-        }
-
-        with (
-            patch.dict(
-                os.environ,
-                {
-                    "COMMENT_INTENT_CLASSIFIER_MODE": "llm",
-                    "OPENAI_API_KEY": "test-key",
-                },
-                clear=False,
-            ),
-            patch(
-                "zendesk_mcp_server.server.urllib.request.urlopen",
-                side_effect=OSError("network unavailable"),
-            ),
-        ):
-            server_module._classify_customer_comment_intent_with_llm.cache_clear()
-            result = server_module._customer_comment_indicates_resolution_acknowledgement(comment)
-
-        self.assertTrue(result)
 
     def test_non_escalated_support_owned_stale_ticket_is_flagged_without_using_priority(self) -> None:
         with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
@@ -4460,6 +4448,8 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
         self.assertEqual(payload["ticket"]["id"], 123456)
         self.assertIn("production_impact", payload["ticket"])
         self.assertFalse(payload["ticket"]["production_impact"]["is_production_issue"])
+        self.assertEqual(len(payload["recent_comment_context"]), 1)
+        self.assertEqual(payload["recent_comment_context"][0]["snippet"], "Continuing investigation on the merged ticket. Continuing investigation on the merged ticket.")
         self.assertEqual(len(payload["comments"]), 1)
         self.assertEqual(payload["comments"][0]["author_id"], 2002)
         self.assertEqual(payload["comments"][0]["body"], "Continuing investigation on the merged ticket.")

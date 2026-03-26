@@ -3,8 +3,6 @@ import logging
 import os
 import random
 import re
-import urllib.error
-import urllib.request
 from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any
 
@@ -40,7 +38,6 @@ ZENDESK_TICKET_LINK_BASE_URL = os.getenv(
     "https://appdomesupport.zendesk.com/agent/tickets",
 )
 EST_TIMEZONE = timezone(timedelta(hours=-5), name="EST")
-COMMENT_INTENT_CLASSIFIER_MODES = {"heuristic", "llm", "hybrid"}
 
 ATTRIBUTION_GUARDRAILS = """
 Evidence rules:
@@ -492,6 +489,14 @@ class ProductionImpactAssessment(BaseModel):
     non_production_signals: list[str] = Field(default_factory=list)
 
 
+class TicketCommentContextItem(BaseModel):
+    created_at: str | None = None
+    source: str
+    public: bool
+    author_id: int | None = None
+    snippet: str
+
+
 class TicketTroubleAssessment(BaseModel):
     ticket_id: int
     ticket_url: str
@@ -506,6 +511,7 @@ class TicketTroubleAssessment(BaseModel):
     flags: list[TicketTroubleFlag]
     crash_attachment_summary: CrashAttachmentSummary | None = None
     production_impact: ProductionImpactAssessment = Field(default_factory=ProductionImpactAssessment)
+    comment_context: list[TicketCommentContextItem] = Field(default_factory=list)
     recent_comment_notes: list[str] = Field(default_factory=list)
     engineering_jira_update_summaries: list[str] = Field(default_factory=list)
     tom: str = "☐"
@@ -1510,6 +1516,30 @@ def _extract_recent_comment_notes(comments: list[dict[str, Any]], requester_id: 
     return notes
 
 
+def _build_comment_context(
+    comments: list[dict[str, Any]],
+    requester_id: int | None,
+    limit: int = 10,
+) -> list[TicketCommentContextItem]:
+    comments_sorted = sorted(
+        comments,
+        key=lambda c: _parse_iso_datetime(c.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc),
+    )
+    selected_comments = comments_sorted[-max(limit, 1):]
+    context: list[TicketCommentContextItem] = []
+    for comment in selected_comments:
+        context.append(
+            TicketCommentContextItem(
+                created_at=comment.get("created_at"),
+                source=_comment_source(comment, requester_id),
+                public=bool(comment.get("public")),
+                author_id=comment.get("author_id"),
+                snippet=_comment_snippet(comment, limit=280),
+            )
+        )
+    return context
+
+
 def _extract_meeting_scheduled_at(text: str, fallback_year: int | None = None) -> datetime | None:
     match = MEETING_DATETIME_PATTERN.search(text)
     if not match:
@@ -1902,135 +1932,6 @@ def _customer_comment_indicates_resolution_acknowledgement(comment: dict[str, An
     text = re.sub(r"\s+", " ", _comment_text(comment)).strip()
     if not text:
         return False
-
-    mode = _comment_intent_classifier_mode()
-    if mode in {"llm", "hybrid"}:
-        llm_result = _classify_customer_comment_intent_with_llm(
-            text=text,
-            model=_comment_intent_classifier_model(),
-            endpoint=_comment_intent_classifier_endpoint(),
-        )
-        if llm_result is not None:
-            return llm_result
-
-    return _heuristic_customer_comment_indicates_resolution_acknowledgement(text)
-
-
-def _comment_intent_classifier_mode() -> str:
-    mode = str(os.getenv("COMMENT_INTENT_CLASSIFIER_MODE") or "hybrid").strip().lower()
-    return mode if mode in COMMENT_INTENT_CLASSIFIER_MODES else "hybrid"
-
-
-def _comment_intent_classifier_model() -> str:
-    return str(os.getenv("OPENAI_COMMENT_CLASSIFIER_MODEL") or "gpt-4o-mini").strip()
-
-
-def _comment_intent_classifier_endpoint() -> str:
-    return str(os.getenv("OPENAI_RESPONSES_API_URL") or "https://api.openai.com/v1/responses").strip()
-
-
-@ttl_cache(ttl=900)
-def _classify_customer_comment_intent_with_llm(
-    text: str,
-    model: str,
-    endpoint: str,
-) -> bool | None:
-    api_key = str(os.getenv("OPENAI_API_KEY") or "").strip()
-    if not api_key:
-        return None
-
-    payload = {
-        "model": model,
-        "input": [
-            {
-                "role": "system",
-                "content": (
-                    "Classify whether a Zendesk customer comment indicates the issue can reasonably be "
-                    "considered resolved, or that the support team's answer/analysis fully addressed the "
-                    "customer's concern. Return strict JSON only."
-                ),
-            },
-            {
-                "role": "user",
-                "content": (
-                    "Return whether this comment is a resolution acknowledgement.\n"
-                    "Use true when the customer is effectively accepting the answer, allowing closure, "
-                    "confirming it worked, or thanking the team for resolving/identifying/explaining the issue.\n"
-                    "Use false when the customer is still waiting, still blocked, asking a follow-up question, "
-                    "reporting the issue persists, or the intent is too ambiguous.\n"
-                    f"Comment:\n{text}"
-                ),
-            },
-        ],
-        "text": {
-            "format": {
-                "type": "json_schema",
-                "name": "customer_comment_intent",
-                "strict": True,
-                "schema": {
-                    "type": "object",
-                    "properties": {
-                        "is_resolution_acknowledgement": {"type": "boolean"},
-                    },
-                    "required": ["is_resolution_acknowledgement"],
-                    "additionalProperties": False,
-                },
-            },
-        },
-        "max_output_tokens": 80,
-    }
-
-    request = urllib.request.Request(
-        endpoint,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}",
-        },
-        method="POST",
-    )
-
-    try:
-        with urllib.request.urlopen(request, timeout=5) as response:
-            response_payload = json.loads(response.read().decode("utf-8"))
-    except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
-        logger.warning("LLM comment-intent classification failed; falling back to heuristic: %s", exc)
-        return None
-
-    response_text = _extract_response_output_text(response_payload)
-    if not response_text:
-        logger.warning("LLM comment-intent classification returned no output text; falling back to heuristic.")
-        return None
-
-    try:
-        result = json.loads(response_text)
-    except json.JSONDecodeError as exc:
-        logger.warning("LLM comment-intent classification returned invalid JSON; falling back to heuristic: %s", exc)
-        return None
-
-    return bool(result.get("is_resolution_acknowledgement"))
-
-
-def _extract_response_output_text(payload: dict[str, Any]) -> str:
-    output_text = payload.get("output_text")
-    if isinstance(output_text, str) and output_text.strip():
-        return output_text.strip()
-
-    parts: list[str] = []
-    for item in payload.get("output") or []:
-        if not isinstance(item, dict):
-            continue
-        for content_item in item.get("content") or []:
-            if not isinstance(content_item, dict):
-                continue
-            if content_item.get("type") == "output_text" and isinstance(content_item.get("text"), str):
-                text = content_item["text"].strip()
-                if text:
-                    parts.append(text)
-    return "\n".join(parts).strip()
-
-
-def _heuristic_customer_comment_indicates_resolution_acknowledgement(text: str) -> bool:
     text = re.sub(r"\s+", " ", text).strip().lower()
 
     unresolved_patterns = (
@@ -2148,6 +2049,7 @@ def _build_ticket_trouble_assessment(
 
     if is_feature_request:
         tom_tovar_comment_metadata = _build_tom_tovar_comment_metadata(comments)
+        comment_context = _build_comment_context(comments=comments, requester_id=requester_id, limit=10)
         recent_comment_notes = _extract_recent_comment_notes(comments=comments, requester_id=requester_id)
         engineering_jira_update_summaries = _summarize_engineering_jira_updates(comments)
         return TicketTroubleAssessment(
@@ -2164,6 +2066,7 @@ def _build_ticket_trouble_assessment(
             flags=[],
             crash_attachment_summary=None,
             production_impact=production_impact,
+            comment_context=comment_context,
             recent_comment_notes=recent_comment_notes,
             engineering_jira_update_summaries=engineering_jira_update_summaries,
             tom="☑" if tom_tovar_comment_metadata["tom_tovar_commented"] else "☐",
@@ -2297,6 +2200,7 @@ def _build_ticket_trouble_assessment(
     customer_public_comments = [
         c for c in public_comments_sorted if requester_id is not None and c.get("author_id") == requester_id
     ]
+    comment_context = _build_comment_context(comments=comments, requester_id=requester_id, limit=10)
     customer_response_flag = _build_customer_comment_response_flag(
         comments=comments,
         requester_id=requester_id,
@@ -2470,6 +2374,7 @@ def _build_ticket_trouble_assessment(
         flags=sorted_flags,
         crash_attachment_summary=crash_attachment_summary,
         production_impact=production_impact,
+        comment_context=comment_context,
         recent_comment_notes=recent_comment_notes,
         engineering_jira_update_summaries=engineering_jira_update_summaries,
         tom="☑" if tom_tovar_comment_metadata["tom_tovar_commented"] else "☐",
@@ -2502,7 +2407,9 @@ def _build_ticket_trouble_markdown_list(tickets: list[TicketTroubleAssessment]) 
         if any(flag.code == "customer_repeated_pressure" for flag in ticket.flags):
             highlights.append("CUSTOMER-PRESSURE")
         highlight_text = f" | highlights={','.join(highlights)}" if highlights else ""
-        lines.append(f"- {ticket_ref} | {subject} | status={status} | risk={ticket.risk_score}{highlight_text}")
+        lines.append(
+            f"- {ticket_ref} | {subject} | status={status} | risk={ticket.risk_score}{highlight_text}"
+        )
         for summary in ticket.engineering_jira_update_summaries:
             lines.append(f"  Engineering: {summary}")
     return "\n".join(lines)
@@ -2742,6 +2649,10 @@ def review_ticket(
         ticket_id=resolved_ticket_id,
         ticket=ticket,
         comments=comments,
+        recent_comment_context=[
+            item.model_dump(mode="json")
+            for item in _build_comment_context(comments=comments, requester_id=ticket.get("requester_id"), limit=10)
+        ],
         attachment_evidence_summary=_build_crash_attachment_summary(
             comments=comments,
             requester_id=ticket.get("requester_id"),
@@ -2931,8 +2842,8 @@ def scan_crash_tickets_in_trouble(
     ] = "crash_detected",
     max_results: Annotated[
         int,
-        Field(description="Maximum number of tagged tickets to inspect (max 1000)."),
-    ] = 250,
+        Field(description="Maximum number of tagged tickets to inspect (max 1000). Keep this modest for interactive scans."),
+    ] = 50,
     per_page: Annotated[
         int,
         Field(description="How many matching tickets to fetch per page from Zendesk search (max 100)."),
@@ -3272,6 +3183,10 @@ def review_random_solved_tickets_for_agent(
             {
                 "ticket_id": resolved_ticket_id,
                 "ticket": ticket,
+                "recent_comment_context": [
+                    item.model_dump(mode="json")
+                    for item in _build_comment_context(comments=comments, requester_id=ticket.get("requester_id"), limit=10)
+                ],
                 "comments": comments,
                 "production_impact": production_impact.model_dump(),
                 "attachment_evidence_summary": _build_crash_attachment_summary(

@@ -17,7 +17,6 @@ This server provides a comprehensive integration with Zendesk. It offers:
 
 - build: `uv venv && uv pip install -e .` or `uv build` in short.
 - setup zendesk credentials in `.env` file, refer to [.env.example](.env.example).
-- optional: set `COMMENT_INTENT_CLASSIFIER_MODE=hybrid|llm|heuristic` plus `OPENAI_API_KEY` to let the server use an LLM for customer-comment intent classification, with heuristic fallback on errors.
 - configure in Claude desktop:
 
 ```json
@@ -146,6 +145,7 @@ Fetch one ticket and return a compact display-ready markdown summary.
 
 Returns a full review packet:
 - ticket payload
+- recent comment context (last 10 comments when available)
 - ticket comments (including attachment metadata)
 - analysis rubric text
 
@@ -234,6 +234,7 @@ Find tickets that matter today based on current attention needs, not just creati
     - `flags`
     - `production_impact`
     - `crash_attachment_summary`
+    - `comment_context` (last 10 comments when available)
     - recent comment notes
 
 - Recommended call:
@@ -319,13 +320,15 @@ Current flag conditions include:
 - `crash_process_gap`: crash/ANR ticket has neither stacktrace evidence nor an explicit request for crash logs.
 - `late_stacktrace_request`: crash/ANR ticket requested stacktrace evidence more than 60 minutes after ticket creation when evidence was not already present.
 
+Structured ticket assessments also include `comment_context`, containing the last 10 comments when available, so downstream clients can reason over recent thread history directly.
+
 ### scan_crash_tickets_in_trouble
 
 Scan open, non-internal tickets with a crash-related tag and flag likely QA/process issues, without a created-date window.
 
 - Input:
   - `tag` (default `crash_detected`)
-  - `max_results` (default `250`, max `1000`)
+  - `max_results` (default `50`, max `1000`)
   - `per_page` (default `100`, max `100`)
   - `exclude_internal` (default `true`)
   - `initial_response_sla_minutes` (default `60`)
@@ -335,9 +338,11 @@ Scan open, non-internal tickets with a crash-related tag and flag likely QA/proc
   - searches `tag=<value>` with `status:open`
   - excludes `pending`, `solved`, and `closed`
   - excludes `internal` when `exclude_internal=true`
+  - large values can be slow because the scan fetches full ticket details and comments per ticket
 
 - Output:
   - Structured result with `tag`, `scanned_count`, `in_trouble_count`, `total_matches`, `retrieved_count`, `truncated`, `ticket_list_markdown`, and per-ticket trouble assessments.
+  - Each ticket assessment includes `comment_context` with the last 10 comments when available.
 
 ### sample_solved_tickets_for_agent
 
