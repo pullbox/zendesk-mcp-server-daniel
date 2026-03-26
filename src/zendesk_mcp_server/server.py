@@ -1421,8 +1421,8 @@ def _extract_meeting_scheduled_at(text: str, fallback_year: int | None = None) -
     return parsed_date.replace(hour=hour, minute=minute, tzinfo=timezone.utc)
 
 
-def _is_public_agent_comment(comment: dict[str, Any], requester_id: int | None) -> bool:
-    return bool(comment.get("public")) and not (requester_id is not None and comment.get("author_id") == requester_id)
+def _is_agent_comment(comment: dict[str, Any], requester_id: int | None) -> bool:
+    return not (requester_id is not None and comment.get("author_id") == requester_id)
 
 
 def _is_meeting_summary_comment(
@@ -1430,7 +1430,7 @@ def _is_meeting_summary_comment(
     requester_id: int | None,
     assignee_id: int | None,
 ) -> bool:
-    if not _is_public_agent_comment(comment, requester_id):
+    if not _is_agent_comment(comment, requester_id):
         return False
     if assignee_id is not None and comment.get("author_id") != assignee_id:
         return False
@@ -1445,16 +1445,16 @@ def _build_meeting_summary_flag(
     assignee_id: int | None,
     updated_at: datetime | None,
 ) -> TicketTroubleFlag | None:
-    public_comments_sorted = sorted(
-        [comment for comment in comments if comment.get("public")],
+    comments_sorted = sorted(
+        comments,
         key=lambda c: _parse_iso_datetime(c.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc),
     )
-    if not public_comments_sorted:
+    if not comments_sorted:
         return None
 
     reference_time = updated_at or datetime.now(timezone.utc)
 
-    for comment in public_comments_sorted:
+    for comment in comments_sorted:
         text = _comment_text(comment)
         is_meeting_reference, scheduled_at = _classify_meeting_reference(text)
         if not is_meeting_reference:
@@ -1468,15 +1468,15 @@ def _build_meeting_summary_flag(
         if scheduled_at is not None and scheduled_at > reference_time:
             continue
 
-        later_public_comments = [
+        later_comments = [
             candidate
-            for candidate in public_comments_sorted
+            for candidate in comments_sorted
             if (
                 (_parse_iso_datetime(candidate.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc))
                 > (comment_time or datetime.min.replace(tzinfo=timezone.utc))
             )
         ]
-        if not scheduled_at and not later_public_comments:
+        if not scheduled_at and not later_comments:
             continue
 
         if any(
@@ -1485,7 +1485,7 @@ def _build_meeting_summary_flag(
                 requester_id=requester_id,
                 assignee_id=assignee_id,
             )
-            for candidate in later_public_comments
+            for candidate in later_comments
         ):
             continue
 
@@ -1499,7 +1499,7 @@ def _build_meeting_summary_flag(
             code="meeting_summary_missing",
             severity="medium",
             message=(
-                f"Meeting/call was requested or scheduled ({meeting_reference}), but no later public "
+                f"Meeting/call was requested or scheduled ({meeting_reference}), but no later "
                 f"meeting summary notes from the {owner_label} were found."
             ),
         )

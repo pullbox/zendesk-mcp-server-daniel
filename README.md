@@ -307,7 +307,7 @@ Current flag conditions include:
 - `status_fields_incomplete`: one or more of `Status With`, `Support Stage`, or `Release Stage` is missing.
 - `missing_initial_response`: no public agent reply after the configured first-response SLA, unless the first comment was internal.
 - `late_initial_response`: first public agent reply exceeded the configured first-response SLA.
-- `meeting_summary_missing`: a meeting/call was requested or scheduled, but no later public summary notes from the assigned SDE/agent were found after the meeting should have occurred.
+- `meeting_summary_missing`: a meeting/call was requested or scheduled, but no later summary notes from the assigned SDE/agent were found after the meeting should have occurred. Public comments and private/internal notes both count.
 - `customer_comment_no_response`: a customer public comment did not receive a public agent follow-up within the configured SLA; also used when a ticket stays open for days after a customer says no response is needed.
 - `solved_without_customer_confirmation`: ticket is solved/closed without explicit customer confirmation in public comments.
 - `high_priority_no_recent_updates`: escalated `high`/`urgent` ticket has been stale longer than the configured threshold.

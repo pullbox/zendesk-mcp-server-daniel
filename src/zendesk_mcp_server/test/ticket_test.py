@@ -1912,6 +1912,85 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
         self.assertNotIn("meeting_summary_missing", flag_codes)
         self.assertFalse(response.root.isError)
 
+    def test_scan_tickets_in_trouble_accepts_private_meeting_summary_from_assignee(self) -> None:
+        list_payload = {
+            "tickets": [
+                {"id": 914, "subject": "ACME | iOS | Login issue", "status": "open", "priority": "normal"},
+            ],
+            "count": 1,
+            "page": 1,
+            "per_page": 25,
+            "sort_by": "created_at",
+            "sort_order": "desc",
+            "filters": {
+                "created_last_hours": 24,
+                "exclude_internal": True,
+            },
+            "has_more": False,
+            "next_page": None,
+            "previous_page": None,
+        }
+        full_ticket_payload = {
+            "id": 914,
+            "subject": "ACME | iOS | Login issue",
+            "status": "open",
+            "priority": "normal",
+            "created_at": "2026-03-05T10:00:00Z",
+            "updated_at": "2026-03-10T16:00:00Z",
+            "requester_id": 1001,
+            "assignee_id": 2002,
+            "tags": [],
+            "custom_fields": {
+                "Status With": "customer",
+                "Support Stage": "investigation",
+                "Release Stage": "n/a",
+            },
+        }
+        comments_payload = [
+            {
+                "author_id": 2002,
+                "public": True,
+                "body": "Let's schedule a call on 2026-03-10 at 14:30.",
+                "html_body": "<p>Let's schedule a call on 2026-03-10 at 14:30.</p>",
+                "created_at": "2026-03-05T11:20:00Z",
+                "attachments": [],
+            },
+            {
+                "author_id": 2002,
+                "public": False,
+                "body": "Call summary: on the call we reviewed the iOS logs and agreed next steps.",
+                "html_body": "<p>Call summary: on the call we reviewed the iOS logs and agreed next steps.</p>",
+                "created_at": "2026-03-10T15:15:00Z",
+                "attachments": [],
+            },
+        ]
+
+        request = CallToolRequest(
+            method="tools/call",
+            params=CallToolRequestParams(
+                name="scan_tickets_in_trouble",
+                arguments={"created_last_hours": 24, "per_page": 25},
+            ),
+        )
+
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        with (
+            patch.object(server_module, "zendesk_client") as mock_client,
+            patch.object(server_module, "_prepare_ticket_payload", return_value=full_ticket_payload),
+        ):
+            mock_client.get_tickets.return_value = list_payload
+            mock_client.get_ticket_comments.return_value = comments_payload
+
+            handler = server_module.mcp._mcp_server.request_handlers[CallToolRequest]
+            response = asyncio.run(handler(request))
+
+        structured = response.root.structuredContent
+        flag_codes = [flag["code"] for flag in structured["tickets"][0]["flags"]]
+        self.assertNotIn("meeting_summary_missing", flag_codes)
+        self.assertFalse(response.root.isError)
+
     def test_scan_tickets_in_trouble_does_not_treat_stacktrace_timestamp_as_meeting(self) -> None:
         list_payload = {
             "tickets": [
