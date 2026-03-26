@@ -3,6 +3,8 @@ import logging
 import os
 import random
 import re
+import urllib.error
+import urllib.request
 from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any
 
@@ -38,6 +40,7 @@ ZENDESK_TICKET_LINK_BASE_URL = os.getenv(
     "https://appdomesupport.zendesk.com/agent/tickets",
 )
 EST_TIMEZONE = timezone(timedelta(hours=-5), name="EST")
+COMMENT_INTENT_CLASSIFIER_MODES = {"heuristic", "llm", "hybrid"}
 
 ATTRIBUTION_GUARDRAILS = """
 Evidence rules:
@@ -567,6 +570,7 @@ TROUBLE_FLAG_WEIGHTS: dict[str, int] = {
     "status_fields_incomplete": 24,
     "customer_comment_no_response": 30,
     "production_customer_comment_no_response": 56,
+    "customer_acknowledged_resolution_ticket_still_open": 22,
     "sev1_customer_data_follow_up_overdue": 38,
     "solved_without_customer_confirmation": 10,
     "high_priority_no_recent_updates": 25,
@@ -1891,19 +1895,202 @@ def _has_internal_tag_title_mismatch(ticket: dict[str, Any]) -> bool:
 
 
 def _is_no_response_expected_comment(comment: dict[str, Any]) -> bool:
-    body = str(comment.get("body") or "").lower()
-    html_body = str(comment.get("html_body") or "").lower()
-    text = f"{body} {html_body}"
-    no_response_expected_terms = [
-        "you can close",
-        "please close",
-        "feel free to close",
-        "thanks, this worked",
-        "thank you, this worked",
-        "resolved, thanks",
-        "i will get back to you",
-    ]
-    return any(term in text for term in no_response_expected_terms)
+    return _customer_comment_indicates_resolution_acknowledgement(comment)
+
+
+def _customer_comment_indicates_resolution_acknowledgement(comment: dict[str, Any]) -> bool:
+    text = re.sub(r"\s+", " ", _comment_text(comment)).strip()
+    if not text:
+        return False
+
+    mode = _comment_intent_classifier_mode()
+    if mode in {"llm", "hybrid"}:
+        llm_result = _classify_customer_comment_intent_with_llm(
+            text=text,
+            model=_comment_intent_classifier_model(),
+            endpoint=_comment_intent_classifier_endpoint(),
+        )
+        if llm_result is not None:
+            return llm_result
+
+    return _heuristic_customer_comment_indicates_resolution_acknowledgement(text)
+
+
+def _comment_intent_classifier_mode() -> str:
+    mode = str(os.getenv("COMMENT_INTENT_CLASSIFIER_MODE") or "hybrid").strip().lower()
+    return mode if mode in COMMENT_INTENT_CLASSIFIER_MODES else "hybrid"
+
+
+def _comment_intent_classifier_model() -> str:
+    return str(os.getenv("OPENAI_COMMENT_CLASSIFIER_MODEL") or "gpt-4o-mini").strip()
+
+
+def _comment_intent_classifier_endpoint() -> str:
+    return str(os.getenv("OPENAI_RESPONSES_API_URL") or "https://api.openai.com/v1/responses").strip()
+
+
+@ttl_cache(ttl=900)
+def _classify_customer_comment_intent_with_llm(
+    text: str,
+    model: str,
+    endpoint: str,
+) -> bool | None:
+    api_key = str(os.getenv("OPENAI_API_KEY") or "").strip()
+    if not api_key:
+        return None
+
+    payload = {
+        "model": model,
+        "input": [
+            {
+                "role": "system",
+                "content": (
+                    "Classify whether a Zendesk customer comment indicates the issue can reasonably be "
+                    "considered resolved, or that the support team's answer/analysis fully addressed the "
+                    "customer's concern. Return strict JSON only."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    "Return whether this comment is a resolution acknowledgement.\n"
+                    "Use true when the customer is effectively accepting the answer, allowing closure, "
+                    "confirming it worked, or thanking the team for resolving/identifying/explaining the issue.\n"
+                    "Use false when the customer is still waiting, still blocked, asking a follow-up question, "
+                    "reporting the issue persists, or the intent is too ambiguous.\n"
+                    f"Comment:\n{text}"
+                ),
+            },
+        ],
+        "text": {
+            "format": {
+                "type": "json_schema",
+                "name": "customer_comment_intent",
+                "strict": True,
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "is_resolution_acknowledgement": {"type": "boolean"},
+                    },
+                    "required": ["is_resolution_acknowledgement"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        "max_output_tokens": 80,
+    }
+
+    request = urllib.request.Request(
+        endpoint,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        },
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            response_payload = json.loads(response.read().decode("utf-8"))
+    except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
+        logger.warning("LLM comment-intent classification failed; falling back to heuristic: %s", exc)
+        return None
+
+    response_text = _extract_response_output_text(response_payload)
+    if not response_text:
+        logger.warning("LLM comment-intent classification returned no output text; falling back to heuristic.")
+        return None
+
+    try:
+        result = json.loads(response_text)
+    except json.JSONDecodeError as exc:
+        logger.warning("LLM comment-intent classification returned invalid JSON; falling back to heuristic: %s", exc)
+        return None
+
+    return bool(result.get("is_resolution_acknowledgement"))
+
+
+def _extract_response_output_text(payload: dict[str, Any]) -> str:
+    output_text = payload.get("output_text")
+    if isinstance(output_text, str) and output_text.strip():
+        return output_text.strip()
+
+    parts: list[str] = []
+    for item in payload.get("output") or []:
+        if not isinstance(item, dict):
+            continue
+        for content_item in item.get("content") or []:
+            if not isinstance(content_item, dict):
+                continue
+            if content_item.get("type") == "output_text" and isinstance(content_item.get("text"), str):
+                text = content_item["text"].strip()
+                if text:
+                    parts.append(text)
+    return "\n".join(parts).strip()
+
+
+def _heuristic_customer_comment_indicates_resolution_acknowledgement(text: str) -> bool:
+    text = re.sub(r"\s+", " ", text).strip().lower()
+
+    unresolved_patterns = (
+        re.compile(r"\bbut\b.{0,40}\b(?:not|still|unable|can't|cannot|didn't|doesn't|issue|problem|error)\b", re.IGNORECASE),
+        re.compile(r"\bstill\b.{0,20}\b(?:issue|problem|error|failing|not working|broken|waiting)\b", re.IGNORECASE),
+        re.compile(r"\b(?:not|isn't|wasn't|hasn't|have not|haven't)\b.{0,20}\b(?:work(?:ing|ed)?|resolved?|fixed|solved)\b", re.IGNORECASE),
+        re.compile(r"\bany update\b", re.IGNORECASE),
+        re.compile(r"\bfollow(?:ing)? up\b", re.IGNORECASE),
+        re.compile(r"\bquestion\b", re.IGNORECASE),
+    )
+    if any(pattern.search(text) for pattern in unresolved_patterns):
+        return False
+
+    explicit_resolution_patterns = (
+        re.compile(r"\byou can close\b", re.IGNORECASE),
+        re.compile(r"\bplease close\b", re.IGNORECASE),
+        re.compile(r"\bfeel free to close\b", re.IGNORECASE),
+        re.compile(r"\b(?:this is |it's |it is )?(?:resolved|fixed|solved)\b", re.IGNORECASE),
+        re.compile(r"\b(?:this|it)\s+(?:worked|works|is working)\b", re.IGNORECASE),
+        re.compile(r"\bno (?:further )?(?:response|reply|follow(?: |-)?up) (?:is )?needed\b", re.IGNORECASE),
+    )
+    if any(pattern.search(text) for pattern in explicit_resolution_patterns):
+        return True
+
+    gratitude_pattern = re.compile(r"\b(?:thanks|thank you|appreciate it|appreciated)\b", re.IGNORECASE)
+    acknowledgement_patterns = (
+        re.compile(r"\b(?:analysis|investigation|root cause|cause|issue|problem)\b.{0,24}\b(?:identified|explained|clarified|found|understood)\b", re.IGNORECASE),
+        re.compile(r"\b(?:identified|explained|clarified|addressed|resolved|helped|answered)\b.{0,24}\b(?:the issue|the problem|our concern|the concern|it)\b", re.IGNORECASE),
+        re.compile(r"\b(?:that|this)\s+(?:makes sense|is clear|helps)\b", re.IGNORECASE),
+    )
+    if gratitude_pattern.search(text) and any(pattern.search(text) for pattern in acknowledgement_patterns):
+        return True
+
+    return False
+
+
+def _build_customer_resolution_acknowledged_open_flag(
+    status: str | None,
+    customer_public_comments: list[dict[str, Any]],
+) -> TicketTroubleFlag | None:
+    if str(status or "").strip().lower() not in OPEN_TICKET_STATUSES or not customer_public_comments:
+        return None
+
+    latest_customer_comment = max(
+        customer_public_comments,
+        key=lambda c: _parse_iso_datetime(c.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc),
+    )
+    if not _customer_comment_indicates_resolution_acknowledgement(latest_customer_comment):
+        return None
+
+    created_at = latest_customer_comment.get("created_at") or "unknown time"
+    return TicketTroubleFlag(
+        code="customer_acknowledged_resolution_ticket_still_open",
+        severity="medium",
+        message=(
+            "Latest public customer comment indicates the issue is effectively resolved or their concern was answered, "
+            f"but the ticket is still open and should be followed up for closure. Customer comment at {created_at}: "
+            f"\"{_comment_snippet(latest_customer_comment)}\""
+        ),
+    )
 
 
 def _has_internal_first_comment(comments: list[dict[str, Any]]) -> bool:
@@ -2120,9 +2307,15 @@ def _build_ticket_trouble_assessment(
     if customer_response_flag is not None:
         flags.append(customer_response_flag)
 
-    confirmation_terms = ["resolved", "works", "working", "fixed", "thank", "confirmed", "solved"]
+    resolution_acknowledged_open_flag = _build_customer_resolution_acknowledged_open_flag(
+        status=status,
+        customer_public_comments=customer_public_comments,
+    )
+    if resolution_acknowledged_open_flag is not None:
+        flags.append(resolution_acknowledged_open_flag)
+
     has_customer_confirmation = any(
-        _contains_any(c.get("body"), confirmation_terms) or _contains_any(c.get("html_body"), confirmation_terms)
+        _customer_comment_indicates_resolution_acknowledgement(c)
         for c in customer_public_comments
     )
     if status in {"solved", "closed"} and not has_customer_confirmation:

@@ -17,6 +17,7 @@ This server provides a comprehensive integration with Zendesk. It offers:
 
 - build: `uv venv && uv pip install -e .` or `uv build` in short.
 - setup zendesk credentials in `.env` file, refer to [.env.example](.env.example).
+- optional: set `COMMENT_INTENT_CLASSIFIER_MODE=hybrid|llm|heuristic` plus `OPENAI_API_KEY` to let the server use an LLM for customer-comment intent classification, with heuristic fallback on errors.
 - configure in Claude desktop:
 
 ```json
@@ -309,6 +310,7 @@ Current flag conditions include:
 - `late_initial_response`: first public agent reply exceeded the configured first-response SLA.
 - `meeting_summary_missing`: a meeting/call was requested or scheduled, but no later summary notes from the assigned SDE/agent were found after the meeting should have occurred. Public comments and private/internal notes both count.
 - `customer_comment_no_response`: a customer public comment did not receive an Appdome follow-up within the configured SLA. Public replies and private/internal Appdome notes both count. Also used when a ticket stays open for days after a customer says no response is needed.
+- `customer_acknowledged_resolution_ticket_still_open`: the latest public customer comment indicates the issue was effectively resolved or their concern was answered, but the ticket is still open and should be followed up for closure.
 - `solved_without_customer_confirmation`: ticket is solved/closed without explicit customer confirmation in public comments.
 - `high_priority_no_recent_updates`: escalated `high`/`urgent` ticket has been stale longer than the configured threshold.
 - `support_owned_no_recent_updates`: non-escalated support-owned ticket has been stale longer than the configured threshold.

@@ -1,6 +1,7 @@
 import asyncio
 import importlib
 import json
+import os
 import sys
 import unittest
 from datetime import datetime, timezone
@@ -2835,6 +2836,189 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
         flag_codes = [flag["code"] for flag in structured["tickets"][0]["flags"]]
         self.assertIn("customer_comment_no_response", flag_codes)
         self.assertFalse(response.root.isError)
+
+    def test_open_ticket_with_customer_acknowledgement_is_flagged_for_closure_follow_up(self) -> None:
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        ticket = {
+            "id": 9041,
+            "subject": "ACME | iOS | Login issue",
+            "status": "open",
+            "priority": "normal",
+            "created_at": "2026-03-05T10:00:00Z",
+            "updated_at": "2026-03-05T11:00:00Z",
+            "requester_id": 1001,
+            "tags": [],
+            "custom_fields": {
+                "Status With": "Customer",
+                "Support Stage": "investigation",
+                "Release Stage": "n/a",
+            },
+        }
+        comments = [
+            {
+                "author_id": 2002,
+                "public": True,
+                "body": "We identified the issue and shared the analysis.",
+                "html_body": "<p>We identified the issue and shared the analysis.</p>",
+                "created_at": "2026-03-05T10:10:00Z",
+                "attachments": [],
+            },
+            {
+                "author_id": 1001,
+                "public": True,
+                "body": "Thanks for the analysis and identifying the issue.",
+                "html_body": "<p>Thanks for the analysis and identifying the issue.</p>",
+                "created_at": "2026-03-05T10:30:00Z",
+                "attachments": [],
+            },
+        ]
+
+        assessment = server_module._build_ticket_trouble_assessment(
+            ticket=ticket,
+            comments=comments,
+            initial_response_sla_minutes=60,
+            high_priority_stale_hours=8,
+        )
+
+        flag_codes = [flag.code for flag in assessment.flags]
+        self.assertIn("customer_acknowledged_resolution_ticket_still_open", flag_codes)
+        self.assertNotIn("customer_comment_no_response", flag_codes)
+
+    def test_solved_ticket_acknowledgement_of_answered_concern_counts_as_customer_confirmation(self) -> None:
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        ticket = {
+            "id": 9042,
+            "subject": "ACME | iOS | Login issue",
+            "status": "solved",
+            "priority": "normal",
+            "created_at": "2026-03-05T10:00:00Z",
+            "updated_at": "2026-03-05T11:00:00Z",
+            "requester_id": 1001,
+            "tags": [],
+            "custom_fields": {
+                "Status With": "Customer",
+                "Support Stage": "resolved",
+                "Release Stage": "n/a",
+            },
+        }
+        comments = [
+            {
+                "author_id": 2002,
+                "public": True,
+                "body": "We identified the issue and shared the analysis.",
+                "html_body": "<p>We identified the issue and shared the analysis.</p>",
+                "created_at": "2026-03-05T10:10:00Z",
+                "attachments": [],
+            },
+            {
+                "author_id": 1001,
+                "public": True,
+                "body": "Thanks for the analysis and identifying the issue.",
+                "html_body": "<p>Thanks for the analysis and identifying the issue.</p>",
+                "created_at": "2026-03-05T10:30:00Z",
+                "attachments": [],
+            },
+        ]
+
+        assessment = server_module._build_ticket_trouble_assessment(
+            ticket=ticket,
+            comments=comments,
+            initial_response_sla_minutes=60,
+            high_priority_stale_hours=8,
+        )
+
+        flag_codes = [flag.code for flag in assessment.flags]
+        self.assertNotIn("solved_without_customer_confirmation", flag_codes)
+
+    def test_customer_acknowledgement_uses_llm_intent_classifier_when_configured(self) -> None:
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        comment = {
+            "author_id": 1001,
+            "public": True,
+            "body": "Thanks for the analysis and identifying the issue.",
+            "html_body": "<p>Thanks for the analysis and identifying the issue.</p>",
+            "created_at": "2026-03-05T10:30:00Z",
+            "attachments": [],
+        }
+        response_payload = {
+            "output": [
+                {
+                    "type": "message",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": '{"is_resolution_acknowledgement": true}',
+                        }
+                    ],
+                }
+            ]
+        }
+        mock_response = MagicMock()
+        mock_response.read.return_value = json.dumps(response_payload).encode("utf-8")
+        mock_urlopen = MagicMock()
+        mock_urlopen.return_value.__enter__.return_value = mock_response
+
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "COMMENT_INTENT_CLASSIFIER_MODE": "llm",
+                    "OPENAI_API_KEY": "test-key",
+                    "OPENAI_COMMENT_CLASSIFIER_MODEL": "test-model",
+                },
+                clear=False,
+            ),
+            patch("zendesk_mcp_server.server.urllib.request.urlopen", mock_urlopen),
+        ):
+            server_module._classify_customer_comment_intent_with_llm.cache_clear()
+            result = server_module._customer_comment_indicates_resolution_acknowledgement(comment)
+
+        self.assertTrue(result)
+        request = mock_urlopen.call_args.args[0]
+        request_payload = json.loads(request.data.decode("utf-8"))
+        self.assertEqual(request_payload["model"], "test-model")
+        self.assertEqual(
+            request_payload["text"]["format"]["name"],
+            "customer_comment_intent",
+        )
+
+    def test_customer_acknowledgement_falls_back_to_heuristic_when_llm_unavailable(self) -> None:
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        comment = {
+            "author_id": 1001,
+            "public": True,
+            "body": "Thanks for the analysis and identifying the issue.",
+            "html_body": "<p>Thanks for the analysis and identifying the issue.</p>",
+            "created_at": "2026-03-05T10:30:00Z",
+            "attachments": [],
+        }
+
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "COMMENT_INTENT_CLASSIFIER_MODE": "llm",
+                    "OPENAI_API_KEY": "test-key",
+                },
+                clear=False,
+            ),
+            patch(
+                "zendesk_mcp_server.server.urllib.request.urlopen",
+                side_effect=OSError("network unavailable"),
+            ),
+        ):
+            server_module._classify_customer_comment_intent_with_llm.cache_clear()
+            result = server_module._customer_comment_indicates_resolution_acknowledgement(comment)
+
+        self.assertTrue(result)
 
     def test_non_escalated_support_owned_stale_ticket_is_flagged_without_using_priority(self) -> None:
         with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
