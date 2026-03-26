@@ -504,6 +504,7 @@ class TicketTroubleAssessment(BaseModel):
     crash_attachment_summary: CrashAttachmentSummary | None = None
     production_impact: ProductionImpactAssessment = Field(default_factory=ProductionImpactAssessment)
     recent_comment_notes: list[str] = Field(default_factory=list)
+    engineering_jira_update_summaries: list[str] = Field(default_factory=list)
     tom: str = "☐"
     tom_tovar_commented: bool = False
     tom_tovar_comment_marker: str | None = None
@@ -550,6 +551,7 @@ class GetImportantTicketsTodayResult(BaseModel):
 DEFAULT_INITIAL_RESPONSE_SLA_MINUTES = 60
 DEFAULT_HIGH_PRIORITY_STALE_HOURS = 8
 PENDING_TICKET_PRIORITY_DISCOUNT = 15
+PENDING_TICKET_ETA_DISCOUNT = 7
 
 TROUBLE_FLAG_WEIGHTS: dict[str, int] = {
     "crash_tag_missing_unreviewed_attachment_evidence": 100,
@@ -823,6 +825,40 @@ CUSTOMER_MEETING_REQUEST_PATTERNS: tuple[re.Pattern[str], ...] = (
         re.IGNORECASE | re.DOTALL,
     ),
 )
+ENGINEERING_JIRA_UPDATE_TITLE_PATTERN = re.compile(r"^\s*engineering\s+jira\s+update\b", re.IGNORECASE)
+ENGINEERING_JIRA_UPDATE_DESCRIPTION_PATTERN = re.compile(
+    r"update\s+description\s*:\s*(.*?)(?:\n\s*updated\s+by\s*:|\Z)",
+    re.IGNORECASE | re.DOTALL,
+)
+ENGINEERING_JIRA_UPDATE_RESOLUTION_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\bfix(?:ed|es)?\b", re.IGNORECASE),
+    re.compile(r"\bresolved?\b", re.IGNORECASE),
+    re.compile(r"\bworkaround\b", re.IGNORECASE),
+    re.compile(r"\bsolution\b", re.IGNORECASE),
+    re.compile(r"\bconfiguration\s+changes?\s*:", re.IGNORECASE),
+    re.compile(r"\bplease\s+(?:apply|use|add|remove|update)\b", re.IGNORECASE),
+)
+ENGINEERING_JIRA_UPDATE_ETA_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\beta\b", re.IGNORECASE),
+    re.compile(r"\bestimated?\b", re.IGNORECASE),
+    re.compile(r"\bexpect(?:ed)?\b.{0,20}\b(?:today|tomorrow|by|within|next)\b", re.IGNORECASE | re.DOTALL),
+    re.compile(r"\b(?:today|tomorrow|within|next)\b.{0,20}\b(?:build|release|update|fix)\b", re.IGNORECASE | re.DOTALL),
+    DATE_OR_TIME_PATTERN,
+)
+ENGINEERING_JIRA_UPDATE_STATUS_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\bin\s+progress\b", re.IGNORECASE),
+    re.compile(r"\binvestigat(?:e|ing|ion)\b", re.IGNORECASE),
+    re.compile(r"\bworking\s+on\b", re.IGNORECASE),
+    re.compile(r"\blooking\s+at\b", re.IGNORECASE),
+    re.compile(r"\bstatus\s+update\b", re.IGNORECASE),
+    re.compile(r"\bunable\s+to\s+validate\b", re.IGNORECASE),
+    re.compile(r"\bnot\s+been\s+able\s+to\s+validate\b", re.IGNORECASE),
+    re.compile(r"\bcould(?:\s+not|n't)\s+validate\b", re.IGNORECASE),
+    re.compile(r"\bcan(?:\s+not|'t|t)\s+reproduce\b", re.IGNORECASE),
+    re.compile(r"\bcould(?:\s+not|n't)\s+reproduce\b", re.IGNORECASE),
+    re.compile(r"\bunable\s+to\s+reproduce\b", re.IGNORECASE),
+    re.compile(r"\bwaiting\s+for\b", re.IGNORECASE),
+)
 
 
 def _parse_iso_datetime(value: str | None) -> datetime | None:
@@ -871,6 +907,92 @@ def _comment_snippet(comment: dict[str, Any], limit: int = 140) -> str:
     if len(text) <= limit:
         return text
     return f"{text[:limit].rstrip()}..."
+
+
+def _extract_engineering_jira_update_description(text: str) -> str:
+    match = ENGINEERING_JIRA_UPDATE_DESCRIPTION_PATTERN.search(text)
+    if not match:
+        return text
+    return match.group(1).strip()
+
+
+def _classify_engineering_jira_update(comment: dict[str, Any]) -> str | None:
+    raw_text = _comment_text(comment).strip()
+    if not raw_text or not ENGINEERING_JIRA_UPDATE_TITLE_PATTERN.search(raw_text):
+        return None
+
+    description = re.sub(r"\s+", " ", _extract_engineering_jira_update_description(raw_text)).strip()
+    if any(pattern.search(description) for pattern in ENGINEERING_JIRA_UPDATE_STATUS_PATTERNS):
+        if any(pattern.search(description) for pattern in ENGINEERING_JIRA_UPDATE_ETA_PATTERNS):
+            return "eta"
+        return "status"
+
+    if any(pattern.search(description) for pattern in ENGINEERING_JIRA_UPDATE_ETA_PATTERNS):
+        return "eta"
+
+    if any(pattern.search(description) for pattern in ENGINEERING_JIRA_UPDATE_RESOLUTION_PATTERNS):
+        return "resolution"
+
+    return "status"
+
+
+def _latest_engineering_jira_update_signal(comments: list[dict[str, Any]]) -> str | None:
+    latest_signal: str | None = None
+    latest_time = datetime.min.replace(tzinfo=timezone.utc)
+
+    for comment in comments:
+        signal = _classify_engineering_jira_update(comment)
+        if signal is None:
+            continue
+        comment_time = _parse_iso_datetime(comment.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc)
+        if comment_time >= latest_time:
+            latest_time = comment_time
+            latest_signal = signal
+
+    return latest_signal
+
+
+def _summarize_engineering_jira_updates(comments: list[dict[str, Any]]) -> list[str]:
+    updates: list[tuple[datetime, str]] = []
+
+    for comment in comments:
+        signal = _classify_engineering_jira_update(comment)
+        if signal is None:
+            continue
+
+        created_at = comment.get("created_at") or "unknown time"
+        comment_time = _parse_iso_datetime(comment.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc)
+        description = re.sub(r"\s+", " ", _extract_engineering_jira_update_description(_comment_text(comment))).strip()
+        if not description:
+            description = _comment_snippet(comment, limit=180)
+        if len(description) > 160:
+            description = f"{description[:160].rstrip()}..."
+        updates.append((comment_time, f"Engineering update ({signal}, {created_at}): {description}"))
+
+    updates.sort(key=lambda item: item[0], reverse=True)
+    return [summary for _, summary in updates]
+
+
+def _pending_priority_interpretation(engineering_jira_update_signal: str | None) -> str:
+    if engineering_jira_update_signal == "resolution":
+        return (
+            "Pending ticket: lower priority because the latest Engineering JIRA Update communicated a likely "
+            "resolution and customer confirmation is still pending before solve."
+        )
+    if engineering_jira_update_signal == "eta":
+        return (
+            "Pending ticket: moderate risk reduction only. The latest Engineering JIRA Update gave an ETA/update, "
+            "not a validated resolution."
+        )
+    if engineering_jira_update_signal == "status":
+        return (
+            "Pending ticket: do not lower risk by default. The latest Engineering JIRA Update is only a status "
+            "update and does not communicate a validated resolution."
+        )
+    return (
+        "Pending ticket: lower priority by default because a solution was communicated and customer "
+        "confirmation is still pending before solve."
+    )
 
 
 def _normalize_priority_value(value: Any) -> str:
@@ -1745,8 +1867,16 @@ def _is_feature_request_ticket(subject: str | None) -> bool:
     return re.search(r"\bfeature request\b", subject, re.IGNORECASE) is not None
 
 
-def _adjust_trouble_risk_score(status: str | None, base_risk_score: int) -> int:
+def _adjust_trouble_risk_score(
+    status: str | None,
+    base_risk_score: int,
+    engineering_jira_update_signal: str | None = None,
+) -> int:
     if str(status or "").strip().lower() == "pending":
+        if engineering_jira_update_signal == "status":
+            return base_risk_score
+        if engineering_jira_update_signal == "eta":
+            return max(0, base_risk_score - PENDING_TICKET_ETA_DISCOUNT)
         return max(0, base_risk_score - PENDING_TICKET_PRIORITY_DISCOUNT)
     return base_risk_score
 
@@ -1832,6 +1962,7 @@ def _build_ticket_trouble_assessment(
     if is_feature_request:
         tom_tovar_comment_metadata = _build_tom_tovar_comment_metadata(comments)
         recent_comment_notes = _extract_recent_comment_notes(comments=comments, requester_id=requester_id)
+        engineering_jira_update_summaries = _summarize_engineering_jira_updates(comments)
         return TicketTroubleAssessment(
             ticket_id=ticket_id,
             ticket_url=_ticket_url(ticket_id) or "",
@@ -1847,6 +1978,7 @@ def _build_ticket_trouble_assessment(
             crash_attachment_summary=None,
             production_impact=production_impact,
             recent_comment_notes=recent_comment_notes,
+            engineering_jira_update_summaries=engineering_jira_update_summaries,
             tom="☑" if tom_tovar_comment_metadata["tom_tovar_commented"] else "☐",
             tom_tovar_commented=tom_tovar_comment_metadata["tom_tovar_commented"],
             tom_tovar_comment_marker=tom_tovar_comment_metadata["tom_tovar_comment_marker"],
@@ -2098,6 +2230,8 @@ def _build_ticket_trouble_assessment(
         flags.append(sev1_customer_data_follow_up_flag)
 
     recent_comment_notes = _extract_recent_comment_notes(comments=comments, requester_id=requester_id)
+    engineering_jira_update_signal = _latest_engineering_jira_update_signal(comments)
+    engineering_jira_update_summaries = _summarize_engineering_jira_updates(comments)
 
     sorted_flags = sorted(
         flags,
@@ -2114,7 +2248,11 @@ def _build_ticket_trouble_assessment(
             for flag in sorted_flags
         ),
     )
-    risk_score = _adjust_trouble_risk_score(status=status, base_risk_score=base_risk_score)
+    risk_score = _adjust_trouble_risk_score(
+        status=status,
+        base_risk_score=base_risk_score,
+        engineering_jira_update_signal=engineering_jira_update_signal,
+    )
     tom_tovar_comment_metadata = _build_tom_tovar_comment_metadata(comments)
 
     return TicketTroubleAssessment(
@@ -2129,8 +2267,7 @@ def _build_ticket_trouble_assessment(
             "Escalated ticket: Zendesk priority mirrors ENG priority."
             if is_escalated
             else (
-                "Pending ticket: lower priority by default because a solution was communicated and customer "
-                "confirmation is still pending before solve."
+                _pending_priority_interpretation(engineering_jira_update_signal)
                 if str(status or "").strip().lower() == "pending"
                 else "Non-escalated ticket: Zendesk priority is not treated as severity; use flags and risk score."
             )
@@ -2141,6 +2278,7 @@ def _build_ticket_trouble_assessment(
         crash_attachment_summary=crash_attachment_summary,
         production_impact=production_impact,
         recent_comment_notes=recent_comment_notes,
+        engineering_jira_update_summaries=engineering_jira_update_summaries,
         tom="☑" if tom_tovar_comment_metadata["tom_tovar_commented"] else "☐",
         tom_tovar_commented=tom_tovar_comment_metadata["tom_tovar_commented"],
         tom_tovar_comment_marker=tom_tovar_comment_metadata["tom_tovar_comment_marker"],
@@ -2172,6 +2310,8 @@ def _build_ticket_trouble_markdown_list(tickets: list[TicketTroubleAssessment]) 
             highlights.append("CUSTOMER-PRESSURE")
         highlight_text = f" | highlights={','.join(highlights)}" if highlights else ""
         lines.append(f"- {ticket_ref} | {subject} | status={status} | risk={ticket.risk_score}{highlight_text}")
+        for summary in ticket.engineering_jira_update_summaries:
+            lines.append(f"  Engineering: {summary}")
     return "\n".join(lines)
 
 

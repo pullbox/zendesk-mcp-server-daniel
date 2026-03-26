@@ -1202,6 +1202,195 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
         self.assertGreater(open_assessment.risk_score, pending_assessment.risk_score)
         self.assertIn("Pending ticket: lower priority by default", pending_assessment.priority_interpretation)
 
+    def test_pending_ticket_with_engineering_jira_resolution_gets_pending_discount(self) -> None:
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        ticket = {
+            "id": 922,
+            "subject": "ACME | Android | Crash after login",
+            "status": "pending",
+            "priority": "normal",
+            "created_at": "2026-03-05T10:00:00Z",
+            "updated_at": "2026-03-05T20:30:00Z",
+            "requester_id": 1001,
+            "tags": [],
+            "custom_fields": {
+                "Status With": "customer",
+                "Support Stage": "investigation",
+                "Release Stage": "PROD",
+            },
+        }
+        comments = [
+            {
+                "author_id": 2002,
+                "public": False,
+                "body": (
+                    "Engineering JIRA Update\n\n"
+                    "Configuration changes:\n"
+                    "--encrypt_string_exclude_list <encrypt_string_exclude_list.txt>\n\n"
+                    "Update Description:\n"
+                    "Engineering provided the required configuration changes and the workaround to apply.\n\n"
+                    "Updated by:\n"
+                    "Yoav Keissar"
+                ),
+                "html_body": "",
+                "created_at": "2026-03-05T12:00:00Z",
+                "attachments": [],
+            }
+        ]
+
+        assessment = server_module._build_ticket_trouble_assessment(
+            ticket=ticket,
+            comments=comments,
+            initial_response_sla_minutes=60,
+            high_priority_stale_hours=8,
+        )
+
+        self.assertEqual(assessment.risk_score, 20)
+        self.assertIn("likely resolution", assessment.priority_interpretation)
+
+    def test_pending_ticket_with_engineering_jira_status_update_keeps_higher_risk(self) -> None:
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        ticket = {
+            "id": 923,
+            "subject": "ACME | Android | Crash after login",
+            "status": "pending",
+            "priority": "normal",
+            "created_at": "2026-03-05T10:00:00Z",
+            "updated_at": "2026-03-05T20:30:00Z",
+            "requester_id": 1001,
+            "tags": [],
+            "custom_fields": {
+                "Status With": "customer",
+                "Support Stage": "investigation",
+                "Release Stage": "PROD",
+            },
+        }
+        comments = [
+            {
+                "author_id": 2002,
+                "public": False,
+                "body": (
+                    "Engineering JIRA Update\n\n"
+                    "Dev Reference:\n"
+                    "Configuration changes:\n"
+                    "--encrypt_string_exclude_list <encrypt_string_exclude_list.txt>\n"
+                    "--assets_ignore_list <assets_ignore_list.txt>\n"
+                    "--smali_renames_classes_extend_list <smali_renames_classes_extend_list.txt>\n\n"
+                    "Update Description:\n"
+                    "The FIDO SDK fingerprint authentication flow classifies errors by type and assigns a different "
+                    "retry behavior to each. We are updating the configuration to better match the FIDO SDK error "
+                    "handling, but we have not been able to validate it yet since we cannot reproduce the issue.\n\n"
+                    "Updated by:\n"
+                    "Yoav Keissar"
+                ),
+                "html_body": "",
+                "created_at": "2026-03-05T12:00:00Z",
+                "attachments": [],
+            }
+        ]
+
+        assessment = server_module._build_ticket_trouble_assessment(
+            ticket=ticket,
+            comments=comments,
+            initial_response_sla_minutes=60,
+            high_priority_stale_hours=8,
+        )
+
+        self.assertEqual(assessment.risk_score, 35)
+        self.assertIn("do not lower risk by default", assessment.priority_interpretation)
+        self.assertTrue(assessment.engineering_jira_update_summaries)
+        self.assertIn("Engineering update (status, 2026-03-05T12:00:00Z)", assessment.engineering_jira_update_summaries[0])
+
+    def test_engineering_jira_update_summaries_include_multiple_updates(self) -> None:
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        ticket = {
+            "id": 924,
+            "subject": "ACME | Android | Crash after login",
+            "status": "open",
+            "priority": "normal",
+            "created_at": "2026-03-05T10:00:00Z",
+            "updated_at": "2026-03-05T20:30:00Z",
+            "requester_id": 1001,
+            "tags": [],
+            "custom_fields": {
+                "Status With": "support",
+                "Support Stage": "investigation",
+                "Release Stage": "PROD",
+            },
+        }
+        comments = [
+            {
+                "author_id": 2002,
+                "public": False,
+                "body": (
+                    "Engineering JIRA Update\n\n"
+                    "Update Description:\n"
+                    "ETA is tomorrow after validation is complete.\n\n"
+                    "Updated by:\n"
+                    "Yoav Keissar"
+                ),
+                "html_body": "",
+                "created_at": "2026-03-05T12:00:00Z",
+                "attachments": [],
+            },
+            {
+                "author_id": 2002,
+                "public": False,
+                "body": (
+                    "Engineering JIRA Update\n\n"
+                    "Update Description:\n"
+                    "Configuration changes were identified, but the team has not been able to validate them yet.\n\n"
+                    "Updated by:\n"
+                    "Yoav Keissar"
+                ),
+                "html_body": "",
+                "created_at": "2026-03-05T14:00:00Z",
+                "attachments": [],
+            },
+        ]
+
+        assessment = server_module._build_ticket_trouble_assessment(
+            ticket=ticket,
+            comments=comments,
+            initial_response_sla_minutes=60,
+            high_priority_stale_hours=8,
+        )
+
+        self.assertEqual(len(assessment.engineering_jira_update_summaries), 2)
+        self.assertIn("2026-03-05T14:00:00Z", assessment.engineering_jira_update_summaries[0])
+        self.assertIn("2026-03-05T12:00:00Z", assessment.engineering_jira_update_summaries[1])
+
+    def test_ticket_markdown_list_includes_engineering_update_summaries(self) -> None:
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        assessment = server_module.TicketTroubleAssessment(
+            ticket_id=99104,
+            ticket_url="https://appdomesupport.zendesk.com/agent/tickets/99104",
+            ticket_link="[99104](https://appdomesupport.zendesk.com/agent/tickets/99104)",
+            subject="ACME | Android | SDK crash issue",
+            status="pending",
+            priority="normal",
+            is_escalated=False,
+            in_trouble=True,
+            risk_score=42,
+            flags=[],
+            engineering_jira_update_summaries=[
+                "Engineering update (status, 2026-03-05T14:00:00Z): Configuration changes were identified, but validation is still pending.",
+                "Engineering update (eta, 2026-03-05T12:00:00Z): ETA is tomorrow after validation is complete.",
+            ],
+        )
+
+        markdown = server_module._build_ticket_trouble_markdown_list([assessment])
+        self.assertIn("Engineering: Engineering update (status, 2026-03-05T14:00:00Z)", markdown)
+        self.assertIn("Engineering: Engineering update (eta, 2026-03-05T12:00:00Z)", markdown)
+
     def test_scan_tickets_in_trouble_includes_markdown_ticket_list(self) -> None:
         list_payload = {
             "tickets": [
