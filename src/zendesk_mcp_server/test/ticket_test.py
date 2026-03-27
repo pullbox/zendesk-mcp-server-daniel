@@ -1366,6 +1366,72 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
         self.assertIn("2026-03-05T14:00:00Z", assessment.engineering_jira_update_summaries[0])
         self.assertIn("2026-03-05T12:00:00Z", assessment.engineering_jira_update_summaries[1])
 
+    def test_engineering_jira_update_linked_ticket_counts_as_resolution_and_public_follow_up(self) -> None:
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        ticket = {
+            "id": 43349,
+            "subject": "Money Free Flex | Android | Pen test bypass",
+            "status": "open",
+            "priority": "urgent",
+            "created_at": "2026-03-25T05:09:13Z",
+            "updated_at": "2026-03-26T14:03:29Z",
+            "requester_id": 1001,
+            "tags": [],
+            "custom_fields": {
+                "Status With": "support",
+                "Support Stage": "investigation",
+                "Release Stage": "PROD",
+                "Escalation Status": "engaged",
+            },
+        }
+        comments = [
+            {
+                "author_id": 2002,
+                "public": False,
+                "body": (
+                    "Engineering JIRA Update\n\n"
+                    "Dev Reference:\n"
+                    "Na\n\n"
+                    "Update Description:\n"
+                    "[https://appdomesupport.zendesk.com/tickets/42629|"
+                    "https://appdomesupport.zendesk.com/tickets/42629|smart-link]\n\n"
+                    "Updated by:\n"
+                    "Or Levy"
+                ),
+                "html_body": "",
+                "created_at": "2026-03-25T09:26:27Z",
+                "attachments": [],
+            },
+            {
+                "author_id": 2003,
+                "public": True,
+                "body": (
+                    "Buen dia, equipo. Les comparto las recomendaciones para solventar los hallazgos del pen test."
+                ),
+                "html_body": "",
+                "created_at": "2026-03-25T14:53:38Z",
+                "attachments": [],
+            },
+        ]
+
+        assessment = server_module._build_ticket_trouble_assessment(
+            ticket=ticket,
+            comments=comments,
+            initial_response_sla_minutes=60,
+            high_priority_stale_hours=8,
+        )
+
+        self.assertTrue(assessment.engineering_jira_update_summaries)
+        self.assertIn(
+            "Engineering update (resolution, 2026-03-25T09:26:27Z)",
+            assessment.engineering_jira_update_summaries[0],
+        )
+        self.assertIsNotNone(assessment.public_solution_follow_up)
+        self.assertIn("Buen dia, equipo", assessment.report_summary)
+        self.assertIn("Solution was shared publicly with the customer", assessment.report_summary)
+
     def test_ticket_markdown_list_includes_engineering_update_summaries(self) -> None:
         with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
             server_module = importlib.import_module("zendesk_mcp_server.server")
@@ -1443,11 +1509,11 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
             response = asyncio.run(handler(request))
 
         structured = response.root.structuredContent
-        self.assertIn("[100](https://appdomesupport.zendesk.com/agent/tickets/100)", structured["ticket_list_markdown"])
+        self.assertIn("#100 | ACME | Android | Crash", structured["ticket_list_markdown"])
         self.assertIn("ACME | Android | Crash", structured["ticket_list_markdown"])
         self.assertFalse(response.root.isError)
 
-    def test_scan_tickets_in_trouble_markdown_highlights_customer_urgency(self) -> None:
+    def test_scan_tickets_in_trouble_report_spells_out_customer_urgency(self) -> None:
         list_payload = {
             "tickets": [
                 {"id": 42468, "subject": "ACME | Android | Login issue", "status": "open", "priority": "normal"},
@@ -1522,7 +1588,10 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
             response = asyncio.run(handler(request))
 
         structured = response.root.structuredContent
-        self.assertIn("highlights=CUSTOMER-URGENT", structured["ticket_list_markdown"])
+        self.assertIn("#42468 | ACME | Android | Login issue", structured["ticket_list_markdown"])
+        self.assertIn("Flags: Customer urgent", structured["ticket_list_markdown"])
+        self.assertIn("report_summary", structured["tickets"][0])
+        self.assertIn("Customer urgent", structured["tickets"][0]["report_summary"])
         self.assertEqual(structured["tickets"][0]["flags"][0]["code"], "customer_urgency")
         self.assertFalse(response.root.isError)
 
@@ -2311,12 +2380,17 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
 
         structured = response.root.structuredContent
         markdown = structured["ticket_list_markdown"]
-        self.assertIn("Summary:", markdown)
+        self.assertIn("#42968 | Supervielle | Android | App crashes on some specific devices", markdown)
         self.assertIn("Escalated", markdown)
         self.assertIn("Customer unhappy", markdown)
-        self.assertIn("Meeting summary flag raised", markdown)
+        self.assertIn("Flags: Customer unhappy", markdown)
+        self.assertIn("Meeting summary missing", markdown)
         self.assertIn("Workaround or fix identified", markdown)
         self.assertIn("ImageReader warm-up in onCreate()", markdown)
+        self.assertIn("report_title", structured["tickets"][0])
+        self.assertIn("report_summary", structured["tickets"][0])
+        self.assertIn("summary", structured["tickets"][0])
+        self.assertIn("Escalated", structured["tickets"][0]["summary"])
         self.assertIn("ticket_summary_paragraph", structured["tickets"][0])
         self.assertFalse(response.root.isError)
 
@@ -3046,7 +3120,7 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
         ticket = structured["tickets"][0]
         flag_codes = [flag["code"] for flag in ticket["flags"]]
         self.assertIn("production_customer_comment_no_response", flag_codes)
-        self.assertIn("PROD-NO-RESPONSE", structured["ticket_list_markdown"])
+        self.assertIn("Production customer awaiting response", structured["ticket_list_markdown"])
         self.assertGreaterEqual(ticket["risk_score"], 56)
         self.assertFalse(response.root.isError)
 
@@ -3141,7 +3215,7 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
         flag_codes = [flag["code"] for flag in ticket["flags"]]
         self.assertNotIn("production_customer_comment_no_response", flag_codes)
         self.assertNotIn("customer_comment_no_response", flag_codes)
-        self.assertNotIn("PROD-NO-RESPONSE", structured["ticket_list_markdown"])
+        self.assertNotIn("Production customer awaiting response", structured["ticket_list_markdown"])
         self.assertFalse(response.root.isError)
 
     def test_scan_tickets_in_trouble_ignores_no_response_expected_customer_comment(self) -> None:
@@ -3981,14 +4055,17 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
         self.assertIn("meeting/call requests", pressure_flags[0].message.lower())
         self.assertIn("dissatisfaction/frustration", pressure_flags[0].message.lower())
 
-    def test_scan_tickets_in_trouble_markdown_highlights_customer_pressure(self) -> None:
+    def test_scan_tickets_in_trouble_report_spells_out_customer_pressure(self) -> None:
         with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
             server_module = importlib.import_module("zendesk_mcp_server.server")
 
-        assessment = server_module.TicketTroubleAssessment(
+        assessment = server_module._populate_ticket_report_fields(server_module.TicketTroubleAssessment(
             ticket_id=99103,
             ticket_url="https://appdomesupport.zendesk.com/agent/tickets/99103",
             ticket_link="[99103](https://appdomesupport.zendesk.com/agent/tickets/99103)",
+            report_title=None,
+            report_summary=None,
+            report_entry=None,
             subject="ACME | Android | SDK crash issue",
             status="open",
             priority="normal",
@@ -4002,10 +4079,10 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
                     message="Customer posted multiple pressure/escalation comments.",
                 )
             ],
-        )
+        ))
 
         markdown = server_module._build_ticket_trouble_markdown_list([assessment])
-        self.assertIn("CUSTOMER-PRESSURE", markdown)
+        self.assertIn("Customer repeated pressure", markdown)
 
     def test_ticket_with_uat_only_signals_is_not_flagged_as_production_issue(self) -> None:
         with patch("zendesk_mcp_server.zendesk_client.Zenpy"):

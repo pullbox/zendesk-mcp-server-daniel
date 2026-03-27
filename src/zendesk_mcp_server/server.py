@@ -509,7 +509,11 @@ class TicketTroubleAssessment(BaseModel):
     ticket_id: int
     ticket_url: str
     ticket_link: str
+    report_title: str | None = None
+    report_summary: str | None = None
+    report_entry: str | None = None
     subject: str | None = None
+    summary: str | None = None
     status: str | None = None
     priority: str | None = None
     is_escalated: bool = False
@@ -530,6 +534,8 @@ class TicketTroubleAssessment(BaseModel):
     tom_tovar_latest_comment_at: str | None = None
     tom_tovar_comment_summary: str | None = None
     ticket_summary_paragraph: str | None = None
+    flag_labels: list[str] = Field(default_factory=list)
+    public_solution_follow_up: TicketCommentContextItem | None = None
 
 
 class ScanTicketsInTroubleResult(BaseModel):
@@ -861,6 +867,10 @@ ENGINEERING_JIRA_UPDATE_RESOLUTION_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bresolved?\b", re.IGNORECASE),
     re.compile(r"\bworkaround\b", re.IGNORECASE),
     re.compile(r"\bsolution\b", re.IGNORECASE),
+    re.compile(r"\bsmart-link\b", re.IGNORECASE),
+    re.compile(r"https?://[^\s|]+/tickets/\d+", re.IGNORECASE),
+    re.compile(r"\b(?:ticket|request)\s*#?\s*\d+\b", re.IGNORECASE),
+    re.compile(r"\bsame\s+as\s+#?\d+\b", re.IGNORECASE),
     re.compile(r"\bconfiguration\s+changes?\s*:", re.IGNORECASE),
     re.compile(r"\bplease\s+(?:apply|use|add|remove|update)\b", re.IGNORECASE),
 )
@@ -997,6 +1007,55 @@ def _summarize_engineering_jira_updates(comments: list[dict[str, Any]]) -> list[
 
     updates.sort(key=lambda item: item[0], reverse=True)
     return [summary for _, summary in updates]
+
+
+def _latest_engineering_resolution_time(comments: list[dict[str, Any]]) -> datetime | None:
+    latest_resolution_at: datetime | None = None
+
+    for comment in comments:
+        if _classify_engineering_jira_update(comment) != "resolution":
+            continue
+        comment_time = _parse_iso_datetime(comment.get("created_at"))
+        if comment_time is None:
+            continue
+        if latest_resolution_at is None or comment_time > latest_resolution_at:
+            latest_resolution_at = comment_time
+
+    return latest_resolution_at
+
+
+def _latest_public_agent_follow_up_after_resolution(
+    comments: list[dict[str, Any]],
+    requester_id: int | None,
+) -> TicketCommentContextItem | None:
+    resolution_time = _latest_engineering_resolution_time(comments)
+    if resolution_time is None:
+        return None
+
+    latest_agent_comment: dict[str, Any] | None = None
+    latest_agent_comment_time: datetime | None = None
+    for comment in comments:
+        if not comment.get("public"):
+            continue
+        if requester_id is not None and comment.get("author_id") == requester_id:
+            continue
+        comment_time = _parse_iso_datetime(comment.get("created_at"))
+        if comment_time is None or comment_time <= resolution_time:
+            continue
+        if latest_agent_comment_time is None or comment_time > latest_agent_comment_time:
+            latest_agent_comment = comment
+            latest_agent_comment_time = comment_time
+
+    if latest_agent_comment is None:
+        return None
+
+    return TicketCommentContextItem(
+        created_at=latest_agent_comment.get("created_at"),
+        source=_comment_source(latest_agent_comment, requester_id),
+        public=bool(latest_agent_comment.get("public")),
+        author_id=latest_agent_comment.get("author_id"),
+        snippet=_comment_snippet(latest_agent_comment, limit=280),
+    )
 
 
 def _pending_priority_interpretation(engineering_jira_update_signal: str | None) -> str:
@@ -2112,11 +2171,15 @@ def _build_ticket_trouble_assessment(
         comment_context = _build_comment_context(comments=comments, requester_id=requester_id, limit=10)
         recent_comment_notes = _extract_recent_comment_notes(comments=comments, requester_id=requester_id)
         engineering_jira_update_summaries = _summarize_engineering_jira_updates(comments)
-        return TicketTroubleAssessment(
+        return _populate_ticket_report_fields(TicketTroubleAssessment(
             ticket_id=ticket_id,
             ticket_url=_ticket_url(ticket_id) or "",
             ticket_link=_ticket_link(ticket_id) or "",
+            report_title=None,
+            report_summary=None,
+            report_entry=None,
             subject=subject,
+            summary="No major trouble signals detected.",
             status=status,
             priority="low",
             is_escalated=is_escalated,
@@ -2137,7 +2200,11 @@ def _build_ticket_trouble_assessment(
             tom_tovar_latest_comment_at=tom_tovar_comment_metadata["tom_tovar_latest_comment_at"],
             tom_tovar_comment_summary=tom_tovar_comment_metadata["tom_tovar_comment_summary"],
             ticket_summary_paragraph="No major trouble signals detected.",
-        )
+            public_solution_follow_up=_latest_public_agent_follow_up_after_resolution(
+                comments=comments,
+                requester_id=requester_id,
+            ),
+        ))
 
     public_comments = [c for c in comments if c.get("public")]
     first_comment_context = _build_first_comment_context(ticket=ticket, comments=comments, requester_id=requester_id)
@@ -2418,7 +2485,11 @@ def _build_ticket_trouble_assessment(
         ticket_id=ticket_id,
         ticket_url=_ticket_url(ticket_id) or "",
         ticket_link=_ticket_link(ticket_id) or "",
+        report_title=None,
+        report_summary=None,
+        report_entry=None,
         subject=subject,
+        summary=None,
         status=status,
         priority=priority,
         is_escalated=is_escalated,
@@ -2446,9 +2517,12 @@ def _build_ticket_trouble_assessment(
         tom_tovar_comment_count=tom_tovar_comment_metadata["tom_tovar_comment_count"],
         tom_tovar_latest_comment_at=tom_tovar_comment_metadata["tom_tovar_latest_comment_at"],
         tom_tovar_comment_summary=tom_tovar_comment_metadata["tom_tovar_comment_summary"],
+        public_solution_follow_up=_latest_public_agent_follow_up_after_resolution(
+            comments=comments,
+            requester_id=requester_id,
+        ),
     )
-    assessment.ticket_summary_paragraph = _build_ticket_summary_paragraph(assessment)
-    return assessment
+    return _populate_ticket_report_fields(assessment)
 
 
 def _build_ticket_trouble_markdown_list(tickets: list[TicketTroubleAssessment]) -> str:
@@ -2457,33 +2531,16 @@ def _build_ticket_trouble_markdown_list(tickets: list[TicketTroubleAssessment]) 
 
     lines: list[str] = []
     for ticket in tickets:
-        ticket_ref = ticket.ticket_link or f"#{ticket.ticket_id}"
-        subject = ticket.subject or "Untitled"
-        status = ticket.status or "unknown"
-        highlights: list[str] = []
-        if any(flag.code == "customer_urgency" for flag in ticket.flags):
-            highlights.append("CUSTOMER-URGENT")
-        if any(flag.code == "production_user_impact" for flag in ticket.flags):
-            highlights.append("PROD-IMPACT")
-        if any(flag.code == "production_customer_comment_no_response" for flag in ticket.flags):
-            highlights.append("PROD-NO-RESPONSE")
-        if any(flag.code == "customer_unhappy" for flag in ticket.flags):
-            highlights.append("CUSTOMER-UNHAPPY")
-        if any(flag.code == "customer_repeated_pressure" for flag in ticket.flags):
-            highlights.append("CUSTOMER-PRESSURE")
-        highlight_text = f" | highlights={','.join(highlights)}" if highlights else ""
-        lines.append(
-            f"- {ticket_ref} | {subject} | status={status} | risk={ticket.risk_score}{highlight_text}"
-        )
-        if ticket.ticket_summary_paragraph:
-            lines.append(f"  Summary: {ticket.ticket_summary_paragraph}")
+        lines.append(ticket.report_title or _report_title(ticket))
+        lines.append(ticket.report_summary or _build_ticket_report_summary(ticket))
         for insight in _comment_context_markdown_insights(ticket.comment_context):
             lines.append(f"  Comment Insight: {insight}")
         for note in ticket.recent_comment_notes[:2]:
             lines.append(f"  Note: {note}")
         for summary in ticket.engineering_jira_update_summaries:
             lines.append(f"  Engineering: {summary}")
-    return "\n".join(lines)
+        lines.append("")
+    return "\n".join(lines).rstrip()
 
 
 def _comment_context_markdown_insights(comment_context: list[TicketCommentContextItem]) -> list[str]:
@@ -2532,6 +2589,74 @@ def _build_engineering_update_paragraph_fragment(engineering_jira_update_summari
     if signal == "eta":
         return f"Engineering shared ETA/update ({description})"
     return f"Engineering is on it ({description})"
+
+
+def _flag_label(flag: TicketTroubleFlag) -> str:
+    labels = {
+        "customer_urgency": "Customer urgent",
+        "production_user_impact": "Production impact",
+        "production_customer_comment_no_response": "Production customer awaiting response",
+        "customer_comment_no_response": "Customer awaiting response",
+        "customer_unhappy": "Customer unhappy",
+        "customer_repeated_pressure": "Customer repeated pressure",
+        "ticket_report_request": "Customer requested ticket report",
+        "meeting_summary_missing": "Meeting summary missing",
+        "status_fields_incomplete": "Status fields incomplete",
+        "customer_acknowledged_resolution_ticket_still_open": "Ready to close but still open",
+        "sev1_customer_data_follow_up_overdue": "SEV1 follow-up overdue",
+        "solved_without_customer_confirmation": "Closed without customer confirmation",
+        "high_priority_no_recent_updates": "High-priority stale",
+        "support_owned_no_recent_updates": "Support-owned stale",
+        "late_initial_response": "Late initial response",
+        "missing_initial_response": "Missing initial response",
+        "late_stacktrace_request": "Late stacktrace request",
+        "title_incorrect": "Title format issue",
+        "crash_process_gap": "Crash process gap",
+        "internal_tag_title_mismatch": "Internal tag/title mismatch",
+    }
+    return labels.get(flag.code, flag.code.replace("_", " "))
+
+
+def _report_subject(ticket: TicketTroubleAssessment) -> str:
+    return ticket.subject or "Untitled"
+
+
+def _report_title(ticket: TicketTroubleAssessment) -> str:
+    return f"#{ticket.ticket_id} | {_report_subject(ticket)}"
+
+
+def _context_report_fragments(ticket: TicketTroubleAssessment) -> list[str]:
+    fragments: list[str] = []
+
+    opening = ticket.first_comment_context.snippet if ticket.first_comment_context else ""
+    if opening:
+        opening = re.sub(r"\s+", " ", opening).strip()
+        if len(opening) > 110:
+            opening = f"{opening[:110].rstrip()}..."
+        fragments.append(f"Opening context: {opening}")
+
+    latest_customer_comment = next(
+        (comment for comment in reversed(ticket.comment_context) if comment.source == "customer_public_comment" and comment.snippet),
+        None,
+    )
+    if latest_customer_comment is not None:
+        snippet = re.sub(r"\s+", " ", latest_customer_comment.snippet).strip()
+        if len(snippet) > 110:
+            snippet = f"{snippet[:110].rstrip()}..."
+        candidate = f"Latest customer comment: {snippet}"
+        if candidate not in fragments:
+            fragments.append(candidate)
+
+    latest_comment = ticket.comment_context[-1].snippet if ticket.comment_context else ""
+    if latest_comment:
+        latest_comment = re.sub(r"\s+", " ", latest_comment).strip()
+        if len(latest_comment) > 110:
+            latest_comment = f"{latest_comment[:110].rstrip()}..."
+        candidate = f"Latest thread update: {latest_comment}"
+        if candidate not in fragments:
+            fragments.append(candidate)
+
+    return fragments[:2]
 
 
 def _build_ticket_summary_paragraph(ticket: TicketTroubleAssessment) -> str:
@@ -2583,6 +2708,38 @@ def _build_ticket_summary_paragraph(ticket: TicketTroubleAssessment) -> str:
         fragments.append("No major trouble signals detected")
 
     return " \u00b7 ".join(fragments[:2]) + (". " + ". ".join(fragments[2:]) if len(fragments) > 2 else ".")
+
+
+def _build_ticket_report_summary(ticket: TicketTroubleAssessment) -> str:
+    fragments: list[str] = []
+
+    if ticket.ticket_summary_paragraph:
+        fragments.append(ticket.ticket_summary_paragraph.rstrip("."))
+
+    if ticket.public_solution_follow_up and ticket.public_solution_follow_up.snippet:
+        follow_up_snippet = re.sub(r"\s+", " ", ticket.public_solution_follow_up.snippet).strip()
+        if len(follow_up_snippet) > 140:
+            follow_up_snippet = f"{follow_up_snippet[:140].rstrip()}..."
+        fragments.append(f"Solution was shared publicly with the customer ({follow_up_snippet})")
+
+    for context_fragment in _context_report_fragments(ticket):
+        fragments.append(context_fragment.rstrip("."))
+
+    if ticket.flag_labels:
+        fragments.append(f"Flags: {'; '.join(ticket.flag_labels)}")
+
+    return ". ".join(fragment for fragment in fragments if fragment).strip() + "."
+
+
+def _populate_ticket_report_fields(ticket: TicketTroubleAssessment) -> TicketTroubleAssessment:
+    ticket.flag_labels = [_flag_label(flag) for flag in ticket.flags]
+    if not ticket.ticket_summary_paragraph:
+        ticket.ticket_summary_paragraph = _build_ticket_summary_paragraph(ticket)
+    ticket.summary = ticket.ticket_summary_paragraph
+    ticket.report_title = _report_title(ticket)
+    ticket.report_summary = _build_ticket_report_summary(ticket)
+    ticket.report_entry = f"{ticket.report_title}\n{ticket.report_summary}"
+    return ticket
 
 
 def _sort_ticket_assessments_by_importance(
