@@ -2018,7 +2018,7 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
         self.assertEqual(comment_context[-1]["created_at"], "2026-03-05T10:11:00Z")
         self.assertFalse(response.root.isError)
 
-    def test_scan_tickets_in_trouble_includes_opening_context(self) -> None:
+    def test_scan_tickets_in_trouble_includes_first_comment_context(self) -> None:
         list_payload = {
             "tickets": [
                 {"id": 9123, "subject": "ACME | iOS | Login issue", "status": "open", "priority": "normal"},
@@ -2092,11 +2092,66 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
             handler = server_module.mcp._mcp_server.request_handlers[CallToolRequest]
             response = asyncio.run(handler(request))
 
-        opening_context = response.root.structuredContent["tickets"][0]["opening_context"]
-        self.assertEqual(opening_context["created_at"], "2026-03-05T10:05:00Z")
-        self.assertEqual(opening_context["source"], "customer_public_comment")
-        self.assertIn("Customer cannot log in", opening_context["snippet"])
+        first_comment_context = response.root.structuredContent["tickets"][0]["first_comment_context"]
+        self.assertEqual(first_comment_context["created_at"], "2026-03-05T10:05:00Z")
+        self.assertEqual(first_comment_context["source"], "customer_public_comment")
+        self.assertIn("Customer cannot log in", first_comment_context["snippet"])
         self.assertFalse(response.root.isError)
+
+    def test_first_comment_context_uses_literal_first_public_comment_even_when_thin(self) -> None:
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        ticket = {
+            "id": 91231,
+            "subject": "Mynt | iOS | Session headers clarification",
+            "status": "open",
+            "priority": "normal",
+            "created_at": "2026-03-05T10:00:00Z",
+            "updated_at": "2026-03-05T12:30:00Z",
+            "requester_id": 1001,
+            "description": "Customer requested help.",
+            "tags": [],
+            "custom_fields": {
+                "Status With": "customer",
+                "Support Stage": "investigation",
+                "Release Stage": "n/a",
+            },
+        }
+        comments = [
+            {
+                "author_id": 1001,
+                "public": True,
+                "body": "Can we have a call regarding session headers?",
+                "html_body": "<p>Can we have a call regarding session headers?</p>",
+                "created_at": "2026-03-05T10:05:00Z",
+                "attachments": [],
+            },
+            {
+                "author_id": 1001,
+                "public": True,
+                "body": (
+                    "We are looking for a test curl command that simulates an at-risk session with "
+                    "MitM Attack, Emulators, and VPN so we can validate signed payload decryption."
+                ),
+                "html_body": (
+                    "<p>We are looking for a test curl command that simulates an at-risk session with "
+                    "MitM Attack, Emulators, and VPN so we can validate signed payload decryption.</p>"
+                ),
+                "created_at": "2026-03-05T10:20:00Z",
+                "attachments": [],
+            },
+        ]
+
+        first_comment_context = server_module._build_first_comment_context(
+            ticket=ticket,
+            comments=comments,
+            requester_id=1001,
+        )
+
+        self.assertIsNotNone(first_comment_context)
+        self.assertEqual(first_comment_context.created_at, "2026-03-05T10:05:00Z")
+        self.assertIn("call regarding session headers", first_comment_context.snippet.lower())
 
     def test_scan_tickets_in_trouble_markdown_includes_comment_insight_lines(self) -> None:
         list_payload = {
@@ -2176,47 +2231,6 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
         self.assertIn("Latest customer comment", markdown)
         self.assertIn("Thanks, this helps.", markdown)
         self.assertFalse(response.root.isError)
-
-    def test_title_opening_context_mismatch_is_flagged(self) -> None:
-        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
-            server_module = importlib.import_module("zendesk_mcp_server.server")
-
-        ticket = {
-            "id": 9124,
-            "subject": "ACME | iOS | Session headers clarification",
-            "status": "open",
-            "priority": "normal",
-            "created_at": "2026-03-05T10:00:00Z",
-            "updated_at": "2026-03-05T12:30:00Z",
-            "requester_id": 1001,
-            "description": "Customer cannot log in after updating the app.",
-            "tags": [],
-            "custom_fields": {
-                "Status With": "customer",
-                "Support Stage": "investigation",
-                "Release Stage": "n/a",
-            },
-        }
-        comments = [
-            {
-                "author_id": 1001,
-                "public": True,
-                "body": "Customer cannot log in after updating the app.",
-                "html_body": "<p>Customer cannot log in after updating the app.</p>",
-                "created_at": "2026-03-05T10:05:00Z",
-                "attachments": [],
-            }
-        ]
-
-        assessment = server_module._build_ticket_trouble_assessment(
-            ticket=ticket,
-            comments=comments,
-            initial_response_sla_minutes=60,
-            high_priority_stale_hours=8,
-        )
-
-        flag_codes = [flag.code for flag in assessment.flags]
-        self.assertIn("title_opening_context_mismatch", flag_codes)
 
     def test_scan_tickets_in_trouble_flags_missing_public_meeting_summary_from_assignee(self) -> None:
         list_payload = {
@@ -2424,6 +2438,93 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
                 "public": False,
                 "body": "Call summary: on the call we reviewed the iOS logs and agreed next steps.",
                 "html_body": "<p>Call summary: on the call we reviewed the iOS logs and agreed next steps.</p>",
+                "created_at": "2026-03-10T15:15:00Z",
+                "attachments": [],
+            },
+        ]
+
+        request = CallToolRequest(
+            method="tools/call",
+            params=CallToolRequestParams(
+                name="scan_tickets_in_trouble",
+                arguments={"created_last_hours": 24, "per_page": 25},
+            ),
+        )
+
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        with (
+            patch.object(server_module, "zendesk_client") as mock_client,
+            patch.object(server_module, "_prepare_ticket_payload", return_value=full_ticket_payload),
+        ):
+            mock_client.get_tickets.return_value = list_payload
+            mock_client.get_ticket_comments.return_value = comments_payload
+
+            handler = server_module.mcp._mcp_server.request_handlers[CallToolRequest]
+            response = asyncio.run(handler(request))
+
+        structured = response.root.structuredContent
+        flag_codes = [flag["code"] for flag in structured["tickets"][0]["flags"]]
+        self.assertNotIn("meeting_summary_missing", flag_codes)
+        self.assertFalse(response.root.isError)
+
+    def test_scan_tickets_in_trouble_accepts_private_meeting_summary_from_non_assignee_teammate(self) -> None:
+        list_payload = {
+            "tickets": [
+                {"id": 9141, "subject": "ACME | iOS | Session headers clarification", "status": "open", "priority": "normal"},
+            ],
+            "count": 1,
+            "page": 1,
+            "per_page": 25,
+            "sort_by": "created_at",
+            "sort_order": "desc",
+            "filters": {
+                "created_last_hours": 24,
+                "exclude_internal": True,
+            },
+            "has_more": False,
+            "next_page": None,
+            "previous_page": None,
+        }
+        full_ticket_payload = {
+            "id": 9141,
+            "subject": "ACME | iOS | Session headers clarification",
+            "status": "open",
+            "priority": "normal",
+            "created_at": "2026-03-05T10:00:00Z",
+            "updated_at": "2026-03-10T16:00:00Z",
+            "requester_id": 1001,
+            "assignee_id": 3003,
+            "tags": [],
+            "custom_fields": {
+                "Status With": "customer",
+                "Support Stage": "investigation",
+                "Release Stage": "n/a",
+            },
+        }
+        comments_payload = [
+            {
+                "author_id": 2002,
+                "public": False,
+                "body": "I will attend the meeting with the customer and sync back with Roy.",
+                "html_body": "<p>I will attend the meeting with the customer and sync back with Roy.</p>",
+                "created_at": "2026-03-10T14:00:00Z",
+                "attachments": [],
+            },
+            {
+                "author_id": 2002,
+                "public": False,
+                "body": (
+                    "Roy Cohen I was able to go over a quick refresh on explaining session headers to the team. "
+                    "What they are looking for is as follows: a test curl command that simulates an at-risk session "
+                    "with MitM Attack, Emulators, and VPN. They want the same payload signing key used in the past."
+                ),
+                "html_body": (
+                    "<p>Roy Cohen I was able to go over a quick refresh on explaining session headers to the team. "
+                    "What they are looking for is as follows: a test curl command that simulates an at-risk session "
+                    "with MitM Attack, Emulators, and VPN. They want the same payload signing key used in the past.</p>"
+                ),
                 "created_at": "2026-03-10T15:15:00Z",
                 "attachments": [],
             },
@@ -4648,8 +4749,8 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
         self.assertEqual(payload["ticket"]["id"], 123456)
         self.assertIn("production_impact", payload["ticket"])
         self.assertFalse(payload["ticket"]["production_impact"]["is_production_issue"])
-        self.assertEqual(payload["opening_context"]["source"], "agent_public_comment")
-        self.assertEqual(payload["opening_context"]["created_at"], "2026-03-05T12:05:00 EST")
+        self.assertEqual(payload["first_comment_context"]["source"], "agent_public_comment")
+        self.assertEqual(payload["first_comment_context"]["created_at"], "2026-03-05T12:05:00 EST")
         self.assertEqual(len(payload["recent_comment_context"]), 1)
         self.assertEqual(payload["recent_comment_context"][0]["snippet"], "Continuing investigation on the merged ticket. Continuing investigation on the merged ticket.")
         self.assertEqual(len(payload["comments"]), 1)

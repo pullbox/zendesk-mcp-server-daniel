@@ -145,7 +145,7 @@ Fetch one ticket and return a compact display-ready markdown summary.
 
 Returns a full review packet:
 - ticket payload
-- opening context
+- first comment context
 - recent comment context (last 10 comments when available)
 - ticket comments (including attachment metadata)
 - analysis rubric text
@@ -235,7 +235,7 @@ Find tickets that matter today based on current attention needs, not just creati
     - `flags`
     - `production_impact`
     - `crash_attachment_summary`
-    - `opening_context`
+    - `first_comment_context`
     - `comment_context` (last 10 comments when available)
     - recent comment notes
 
@@ -321,9 +321,7 @@ Current flag conditions include:
 - `crash_tag_missing_unreviewed_attachment_evidence`: crash-related attachments exist, but the ticket lacks `crash_detected` / `anr_yes` and also lacks the `crash_reviewed` override tag.
 - `crash_process_gap`: crash/ANR ticket has neither stacktrace evidence nor an explicit request for crash logs.
 - `late_stacktrace_request`: crash/ANR ticket requested stacktrace evidence more than 60 minutes after ticket creation when evidence was not already present.
-- `title_opening_context_mismatch`: the ticket title issue segment does not appear to match the opening context.
-
-Structured ticket assessments also include `opening_context` plus `comment_context`, containing the first relevant opening context and the last 10 comments when available, so downstream clients can reason over both the ticket origin and recent thread history directly.
+Structured ticket assessments also include `first_comment_context` plus `comment_context`, containing the first public comment (or ticket description fallback) and the last 10 comments when available, so downstream clients can let Claude evaluate whether the first comment is sufficient context and how the title maps to the thread.
 
 ### scan_crash_tickets_in_trouble
 
@@ -345,7 +343,7 @@ Scan open, non-internal tickets with a crash-related tag and flag likely QA/proc
 
 - Output:
   - Structured result with `tag`, `scanned_count`, `in_trouble_count`, `total_matches`, `retrieved_count`, `truncated`, `ticket_list_markdown`, and per-ticket trouble assessments.
-  - Each ticket assessment includes `opening_context` and `comment_context` with the last 10 comments when available.
+  - Each ticket assessment includes `first_comment_context` and `comment_context` with the last 10 comments when available.
 
 ### sample_solved_tickets_for_agent
 

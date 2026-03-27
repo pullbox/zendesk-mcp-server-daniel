@@ -519,7 +519,7 @@ class TicketTroubleAssessment(BaseModel):
     flags: list[TicketTroubleFlag]
     crash_attachment_summary: CrashAttachmentSummary | None = None
     production_impact: ProductionImpactAssessment = Field(default_factory=ProductionImpactAssessment)
-    opening_context: TicketOpeningContextItem | None = None
+    first_comment_context: TicketOpeningContextItem | None = None
     comment_context: list[TicketCommentContextItem] = Field(default_factory=list)
     recent_comment_notes: list[str] = Field(default_factory=list)
     engineering_jira_update_summaries: list[str] = Field(default_factory=list)
@@ -577,7 +577,6 @@ TROUBLE_FLAG_WEIGHTS: dict[str, int] = {
     "crash_process_gap": 45,
     "crash_tag_missing": 50,
     "internal_tag_title_mismatch": 18,
-    "title_opening_context_mismatch": 22,
     "customer_urgency": 51,
     "customer_unhappy": 52,
     "customer_repeated_pressure": 58,
@@ -598,11 +597,6 @@ TROUBLE_FLAG_WEIGHTS: dict[str, int] = {
 }
 SEVERITY_FALLBACK_WEIGHTS = {"high": 30, "medium": 15, "low": 5}
 SEVERITY_RANK = {"high": 3, "medium": 2, "low": 1}
-TITLE_CONTEXT_STOPWORDS = {
-    "the", "a", "an", "and", "or", "for", "with", "from", "into", "on", "in", "to", "of",
-    "issue", "problem", "request", "question", "help", "support", "clarification", "update",
-    "app", "sdk", "mobile", "platform", "ios", "android", "aws", "view", "trial", "internal",
-}
 CUSTOMER_FOLLOW_UP_SLA_HOURS = 4
 PRODUCTION_CUSTOMER_FOLLOW_UP_SLA_HOURS = 2
 SEV1_CUSTOMER_DATA_FOLLOW_UP_SLA_HOURS = 1
@@ -653,6 +647,12 @@ MEETING_SUMMARY_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bas discussed\s+(?:on|during|in)\s+(?:our|the)\s+(?:call|meeting)\b", re.IGNORECASE),
     re.compile(r"\b(?:on|during)\s+(?:our|the)\s+(?:call|meeting)\b", re.IGNORECASE),
     re.compile(r"\brecap\s+(?:from|of)\s+(?:our|the)\s+(?:call|meeting)\b", re.IGNORECASE),
+)
+MEETING_RECAP_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\b(?:went|go|going)\s+over\b", re.IGNORECASE),
+    re.compile(r"\b(?:reviewed|discussed|walked\s+through|refreshed|explained)\b", re.IGNORECASE),
+    re.compile(r"\b(?:what\s+.+?\s+are\s+looking\s+for\s+is\s+as\s+follows)\b", re.IGNORECASE),
+    re.compile(r"\b(?:they\s+want|they\s+are\s+looking\s+for|next\s+steps?)\b", re.IGNORECASE),
 )
 MEETING_CONTEXT_TIME_PATTERN = re.compile(
     r"\b(?:today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|"
@@ -1555,7 +1555,7 @@ def _build_comment_context(
     return context
 
 
-def _build_opening_context(
+def _build_first_comment_context(
     ticket: dict[str, Any],
     comments: list[dict[str, Any]],
     requester_id: int | None,
@@ -1587,28 +1587,6 @@ def _build_opening_context(
         author_id=ticket.get("requester_id"),
         snippet=description,
     )
-
-
-def _extract_meaningful_title_terms(subject: str | None) -> set[str]:
-    if not subject:
-        return set()
-    segments = [segment.strip() for segment in str(subject).split("|") if segment.strip()]
-    issue_segment = segments[-1] if segments else str(subject)
-    tokens = set(re.findall(r"[a-z0-9]{3,}", issue_segment.lower()))
-    return {token for token in tokens if token not in TITLE_CONTEXT_STOPWORDS}
-
-
-def _title_matches_opening_context(subject: str | None, opening_context: TicketOpeningContextItem | None) -> bool:
-    if opening_context is None or not opening_context.snippet:
-        return True
-
-    title_terms = _extract_meaningful_title_terms(subject)
-    if len(title_terms) < 2:
-        return True
-
-    opening_text = opening_context.snippet.lower()
-    matched_terms = {term for term in title_terms if term in opening_text}
-    return bool(matched_terms)
 
 
 def _extract_meeting_scheduled_at(text: str, fallback_year: int | None = None) -> datetime | None:
@@ -1664,11 +1642,20 @@ def _is_meeting_summary_comment(
 ) -> bool:
     if not _is_agent_comment(comment, requester_id):
         return False
-    if assignee_id is not None and comment.get("author_id") != assignee_id:
-        return False
 
     text = _comment_text(comment)
-    return any(pattern.search(text) for pattern in MEETING_SUMMARY_PATTERNS)
+    has_explicit_summary_marker = any(pattern.search(text) for pattern in MEETING_SUMMARY_PATTERNS)
+    has_recap_content = any(pattern.search(text) for pattern in MEETING_RECAP_PATTERNS)
+
+    if assignee_id is None:
+        return has_explicit_summary_marker or has_recap_content
+
+    if comment.get("author_id") == assignee_id and (has_explicit_summary_marker or has_recap_content):
+        return True
+
+    # Allow another internal teammate to satisfy the summary requirement when the
+    # note clearly reads like a post-meeting recap/handoff for the assignee.
+    return has_explicit_summary_marker or has_recap_content
 
 
 def _build_meeting_summary_flag(
@@ -2120,7 +2107,7 @@ def _build_ticket_trouble_assessment(
 
     if is_feature_request:
         tom_tovar_comment_metadata = _build_tom_tovar_comment_metadata(comments)
-        opening_context = _build_opening_context(ticket=ticket, comments=comments, requester_id=requester_id)
+        first_comment_context = _build_first_comment_context(ticket=ticket, comments=comments, requester_id=requester_id)
         comment_context = _build_comment_context(comments=comments, requester_id=requester_id, limit=10)
         recent_comment_notes = _extract_recent_comment_notes(comments=comments, requester_id=requester_id)
         engineering_jira_update_summaries = _summarize_engineering_jira_updates(comments)
@@ -2138,7 +2125,7 @@ def _build_ticket_trouble_assessment(
             flags=[],
             crash_attachment_summary=None,
             production_impact=production_impact,
-            opening_context=opening_context,
+            first_comment_context=first_comment_context,
             comment_context=comment_context,
             recent_comment_notes=recent_comment_notes,
             engineering_jira_update_summaries=engineering_jira_update_summaries,
@@ -2151,7 +2138,7 @@ def _build_ticket_trouble_assessment(
         )
 
     public_comments = [c for c in comments if c.get("public")]
-    opening_context = _build_opening_context(ticket=ticket, comments=comments, requester_id=requester_id)
+    first_comment_context = _build_first_comment_context(ticket=ticket, comments=comments, requester_id=requester_id)
     crash_tag_reviewed = "crash_reviewed" in tags
     is_unreviewed_crash_ticket = "crash_detected" in tags and not crash_tag_reviewed
     crash_attachment_summary = _build_crash_attachment_summary(
@@ -2173,18 +2160,6 @@ def _build_ticket_trouble_assessment(
                 message="Ticket title is missing expected structured segments (Customer | Context | Issue).",
             )
         )
-    elif not _title_matches_opening_context(subject, opening_context):
-        flags.append(
-            TicketTroubleFlag(
-                code="title_opening_context_mismatch",
-                severity="medium",
-                message=(
-                    "Ticket title issue segment does not appear to match the opening context. "
-                    f'Opening context: "{opening_context.snippet}"'
-                ),
-            )
-        )
-
     if _has_internal_tag_title_mismatch(ticket):
         flags.append(
             TicketTroubleFlag(
@@ -2459,7 +2434,7 @@ def _build_ticket_trouble_assessment(
         flags=sorted_flags,
         crash_attachment_summary=crash_attachment_summary,
         production_impact=production_impact,
-        opening_context=opening_context,
+        first_comment_context=first_comment_context,
         comment_context=comment_context,
         recent_comment_notes=recent_comment_notes,
         engineering_jira_update_summaries=engineering_jira_update_summaries,
@@ -2769,9 +2744,9 @@ def review_ticket(
         ticket_id=resolved_ticket_id,
         ticket=ticket,
         comments=comments,
-        opening_context=(
-            _build_opening_context(ticket=ticket, comments=comments, requester_id=ticket.get("requester_id")).model_dump(mode="json")
-            if _build_opening_context(ticket=ticket, comments=comments, requester_id=ticket.get("requester_id")) is not None
+        first_comment_context=(
+            _build_first_comment_context(ticket=ticket, comments=comments, requester_id=ticket.get("requester_id")).model_dump(mode="json")
+            if _build_first_comment_context(ticket=ticket, comments=comments, requester_id=ticket.get("requester_id")) is not None
             else {}
         ),
         recent_comment_context=[
@@ -3308,9 +3283,9 @@ def review_random_solved_tickets_for_agent(
             {
                 "ticket_id": resolved_ticket_id,
                 "ticket": ticket,
-                "opening_context": (
-                    _build_opening_context(ticket=ticket, comments=comments, requester_id=ticket.get("requester_id")).model_dump(mode="json")
-                    if _build_opening_context(ticket=ticket, comments=comments, requester_id=ticket.get("requester_id")) is not None
+                "first_comment_context": (
+                    _build_first_comment_context(ticket=ticket, comments=comments, requester_id=ticket.get("requester_id")).model_dump(mode="json")
+                    if _build_first_comment_context(ticket=ticket, comments=comments, requester_id=ticket.get("requester_id")) is not None
                     else {}
                 ),
                 "recent_comment_context": [
