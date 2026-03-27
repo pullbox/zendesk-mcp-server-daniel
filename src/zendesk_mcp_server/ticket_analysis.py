@@ -47,6 +47,7 @@ def build_ticket_analysis_input(
     comments: list[dict[str, Any]],
     rubric: str,
     attachment_evidence_summary: dict[str, Any] | None = None,
+    opening_context: dict[str, Any] | None = None,
     recent_comment_context: list[dict[str, Any]] | None = None,
 ) -> str:
     compact_comments = [
@@ -73,6 +74,7 @@ def build_ticket_analysis_input(
     payload = {
         "ticket_id": ticket_id,
         "ticket": _convert_timestamp_fields(ticket),
+        "opening_context": _convert_timestamp_fields(opening_context or {}),
         "recent_comment_context": _convert_timestamp_fields(recent_comment_context or []),
         "comments": _convert_timestamp_fields(compact_comments),
         "attachment_evidence_summary": _convert_timestamp_fields(attachment_evidence_summary or {}),
@@ -105,6 +107,7 @@ def build_batch_ticket_review_input(
                 ),
                 "rubric": rubric_template.format(ticket_id=ticket_id, ticket_link=ticket_link).strip(),
                 "ticket": _convert_timestamp_fields(review["ticket"]),
+                "opening_context": _convert_timestamp_fields(review.get("opening_context") or {}),
                 "recent_comment_context": _convert_timestamp_fields(review.get("recent_comment_context") or []),
                 "comments": _convert_timestamp_fields([
                     {
