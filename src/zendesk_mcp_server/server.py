@@ -2410,9 +2410,43 @@ def _build_ticket_trouble_markdown_list(tickets: list[TicketTroubleAssessment]) 
         lines.append(
             f"- {ticket_ref} | {subject} | status={status} | risk={ticket.risk_score}{highlight_text}"
         )
+        for insight in _comment_context_markdown_insights(ticket.comment_context):
+            lines.append(f"  Comment Insight: {insight}")
+        for note in ticket.recent_comment_notes[:2]:
+            lines.append(f"  Note: {note}")
         for summary in ticket.engineering_jira_update_summaries:
             lines.append(f"  Engineering: {summary}")
     return "\n".join(lines)
+
+
+def _comment_context_markdown_insights(comment_context: list[TicketCommentContextItem]) -> list[str]:
+    if not comment_context:
+        return []
+
+    insights: list[str] = []
+    latest_comment = comment_context[-1]
+    if latest_comment.snippet:
+        insights.append(
+            f"Latest {latest_comment.source} at {latest_comment.created_at or 'unknown time'}: "
+            f"\"{latest_comment.snippet}\""
+        )
+
+    latest_customer_comment = next(
+        (comment for comment in reversed(comment_context) if comment.source == "customer_public_comment"),
+        None,
+    )
+    if (
+        latest_customer_comment is not None
+        and latest_customer_comment is not latest_comment
+        and latest_customer_comment.snippet
+    ):
+        insights.append(
+            "Latest customer comment at "
+            f"{latest_customer_comment.created_at or 'unknown time'}: "
+            f"\"{latest_customer_comment.snippet}\""
+        )
+
+    return insights[:2]
 
 
 def _sort_ticket_assessments_by_importance(

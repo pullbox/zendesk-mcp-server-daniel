@@ -2018,6 +2018,85 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
         self.assertEqual(comment_context[-1]["created_at"], "2026-03-05T10:11:00Z")
         self.assertFalse(response.root.isError)
 
+    def test_scan_tickets_in_trouble_markdown_includes_comment_insight_lines(self) -> None:
+        list_payload = {
+            "tickets": [
+                {"id": 9122, "subject": "ACME | iOS | Login issue", "status": "open", "priority": "normal"},
+            ],
+            "count": 1,
+            "page": 1,
+            "per_page": 25,
+            "sort_by": "created_at",
+            "sort_order": "desc",
+            "filters": {
+                "created_last_hours": 4,
+                "exclude_internal": True,
+            },
+            "has_more": False,
+            "next_page": None,
+            "previous_page": None,
+        }
+        full_ticket_payload = {
+            "id": 9122,
+            "subject": "ACME | iOS | Login issue",
+            "status": "open",
+            "priority": "normal",
+            "created_at": "2026-03-05T10:00:00Z",
+            "updated_at": "2026-03-05T12:30:00Z",
+            "requester_id": 1001,
+            "tags": [],
+            "custom_fields": {
+                "Status With": "customer",
+                "Support Stage": "investigation",
+                "Release Stage": "n/a",
+            },
+        }
+        comments_payload = [
+            {
+                "author_id": 2002,
+                "public": True,
+                "body": "We identified the root cause and shared the workaround.",
+                "html_body": "<p>We identified the root cause and shared the workaround.</p>",
+                "created_at": "2026-03-05T10:10:00Z",
+                "attachments": [],
+            },
+            {
+                "author_id": 1001,
+                "public": True,
+                "body": "Thanks, this helps. We will validate and get back to you.",
+                "html_body": "<p>Thanks, this helps. We will validate and get back to you.</p>",
+                "created_at": "2026-03-05T10:20:00Z",
+                "attachments": [],
+            },
+        ]
+
+        request = CallToolRequest(
+            method="tools/call",
+            params=CallToolRequestParams(
+                name="scan_tickets_in_trouble",
+                arguments={"created_last_hours": 4, "per_page": 25},
+            ),
+        )
+
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        with (
+            patch.object(server_module, "zendesk_client") as mock_client,
+            patch.object(server_module, "_prepare_ticket_payload", return_value=full_ticket_payload),
+        ):
+            mock_client.get_tickets.return_value = list_payload
+            mock_client.get_ticket_comments.return_value = comments_payload
+
+            handler = server_module.mcp._mcp_server.request_handlers[CallToolRequest]
+            response = asyncio.run(handler(request))
+
+        markdown = response.root.structuredContent["ticket_list_markdown"]
+        self.assertIn("Comment Insight:", markdown)
+        self.assertIn("Latest customer comment", markdown)
+        self.assertIn("Thanks, this helps.", markdown)
+        self.assertFalse(response.root.isError)
+
     def test_scan_tickets_in_trouble_flags_missing_public_meeting_summary_from_assignee(self) -> None:
         list_payload = {
             "tickets": [
