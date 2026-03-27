@@ -5,6 +5,7 @@ description = "A simple Zendesk MCP server"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "anthropic>=0.40.0",
     "mcp==1.26.0",
     "python-dotenv>=1.0.1",
     "zenpy>=2.0.56",

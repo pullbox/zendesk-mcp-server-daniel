@@ -3,6 +3,7 @@ import logging
 import os
 import random
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any
 
@@ -38,6 +39,7 @@ ZENDESK_TICKET_LINK_BASE_URL = os.getenv(
     "https://appdomesupport.zendesk.com/agent/tickets",
 )
 EST_TIMEZONE = timezone(timedelta(hours=-5), name="EST")
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
 ATTRIBUTION_GUARDRAILS = """
 Evidence rules:
@@ -1579,9 +1581,9 @@ def _extract_recent_comment_notes(comments: list[dict[str, Any]], requester_id: 
             notes.append(f"Recent comment mentions a call/scheduling ({source}, {created_at}).")
 
         if source == "customer_public_comment":
-            snippet = _comment_snippet(comment, limit=100)
-            if snippet:
-                notes.append(f"Recent customer comment ({created_at}): \"{snippet}\"")
+            full_text = re.sub(r"\s+", " ", text).strip()
+            if full_text:
+                notes.append(f"Recent customer comment ({created_at}): \"{full_text}\"")
 
         for datetime_match in DATE_OR_TIME_PATTERN.finditer(text):
             notes.append(
@@ -1609,7 +1611,7 @@ def _build_comment_context(
                 source=_comment_source(comment, requester_id),
                 public=bool(comment.get("public")),
                 author_id=comment.get("author_id"),
-                snippet=_comment_snippet(comment, limit=280),
+                snippet=re.sub(r"\s+", " ", _comment_text(comment)).strip(),
             )
         )
     return context
@@ -1631,21 +1633,18 @@ def _build_first_comment_context(
             source=_comment_source(first_public_comment, requester_id),
             public=bool(first_public_comment.get("public")),
             author_id=first_public_comment.get("author_id"),
-            snippet=_comment_snippet(first_public_comment, limit=280),
+            snippet=re.sub(r"\s+", " ", _comment_text(first_public_comment)).strip(),
         )
 
     description = str(ticket.get("description") or "").strip()
     if not description:
         return None
-    description = re.sub(r"\s+", " ", description).strip()
-    if len(description) > 280:
-        description = f"{description[:280].rstrip()}..."
     return TicketOpeningContextItem(
         created_at=ticket.get("created_at"),
         source="ticket_description",
         public=True,
         author_id=ticket.get("requester_id"),
-        snippet=description,
+        snippet=re.sub(r"\s+", " ", description).strip(),
     )
 
 
@@ -2531,6 +2530,8 @@ def _build_ticket_trouble_markdown_list(tickets: list[TicketTroubleAssessment]) 
 
     lines: list[str] = []
     for ticket in tickets:
+        if ticket.in_trouble:
+            lines.append(f"Risk score: {ticket.risk_score}")
         lines.append(ticket.report_title or _report_title(ticket))
         lines.append(ticket.report_summary or _build_ticket_report_summary(ticket))
         for insight in _comment_context_markdown_insights(ticket.comment_context):
@@ -2622,7 +2623,8 @@ def _report_subject(ticket: TicketTroubleAssessment) -> str:
 
 
 def _report_title(ticket: TicketTroubleAssessment) -> str:
-    return f"#{ticket.ticket_id} | {_report_subject(ticket)}"
+    link = _ticket_link(ticket.ticket_id) or f"#{ticket.ticket_id}"
+    return f"{link} | {_report_subject(ticket)}"
 
 
 def _context_report_fragments(ticket: TicketTroubleAssessment) -> list[str]:
@@ -2630,9 +2632,6 @@ def _context_report_fragments(ticket: TicketTroubleAssessment) -> list[str]:
 
     opening = ticket.first_comment_context.snippet if ticket.first_comment_context else ""
     if opening:
-        opening = re.sub(r"\s+", " ", opening).strip()
-        if len(opening) > 110:
-            opening = f"{opening[:110].rstrip()}..."
         fragments.append(f"Opening context: {opening}")
 
     latest_customer_comment = next(
@@ -2640,23 +2639,40 @@ def _context_report_fragments(ticket: TicketTroubleAssessment) -> list[str]:
         None,
     )
     if latest_customer_comment is not None:
-        snippet = re.sub(r"\s+", " ", latest_customer_comment.snippet).strip()
-        if len(snippet) > 110:
-            snippet = f"{snippet[:110].rstrip()}..."
-        candidate = f"Latest customer comment: {snippet}"
+        candidate = f"Latest customer comment: {latest_customer_comment.snippet}"
         if candidate not in fragments:
             fragments.append(candidate)
 
     latest_comment = ticket.comment_context[-1].snippet if ticket.comment_context else ""
     if latest_comment:
-        latest_comment = re.sub(r"\s+", " ", latest_comment).strip()
-        if len(latest_comment) > 110:
-            latest_comment = f"{latest_comment[:110].rstrip()}..."
         candidate = f"Latest thread update: {latest_comment}"
         if candidate not in fragments:
             fragments.append(candidate)
 
     return fragments[:2]
+
+
+_FLAG_VERBAL_TEXT: dict[str, str] = {
+    "customer_unhappy": "Customer unhappy",
+    "customer_urgency": "Customer marked this urgent",
+    "customer_repeated_pressure": "Customer applying repeated pressure",
+    "production_customer_comment_no_response": "Recent production customer reply still needs follow-up",
+    "customer_comment_no_response": "Recent customer reply still needs follow-up",
+    "support_owned_no_recent_updates": "Support-owned ticket is stale with no recent update",
+    "high_priority_no_recent_updates": "High-priority ticket is stale with no recent update",
+    "missing_initial_response": "No public initial response yet",
+    "late_initial_response": "Initial response SLA missed",
+    "status_fields_incomplete": "Status fields incomplete",
+    "sev1_customer_data_follow_up_overdue": "SEV1 customer-data follow-up overdue",
+    "meeting_summary_missing": "Meeting summary flag raised",
+    "customer_acknowledged_resolution_ticket_still_open": "Ready to close but still open",
+    "solved_without_customer_confirmation": "Closed without customer confirmation",
+    "ticket_report_request": "Customer requested ticket report",
+    "late_stacktrace_request": "Late stacktrace request",
+    "crash_process_gap": "Crash process gap — no stacktrace collected",
+    "title_incorrect": "Title format issue",
+    "internal_tag_title_mismatch": "Internal tag/title mismatch",
+}
 
 
 def _build_ticket_summary_paragraph(ticket: TicketTroubleAssessment) -> str:
@@ -2666,39 +2682,10 @@ def _build_ticket_summary_paragraph(ticket: TicketTroubleAssessment) -> str:
     if ticket.production_impact.is_production_issue:
         fragments.append("PROD")
 
-    primary_flag_fragments: list[str] = []
     for flag in ticket.flags:
-        if flag.code == "production_user_impact":
-            continue
-        if flag.code == "customer_unhappy":
-            primary_flag_fragments.append("Customer unhappy")
-        elif flag.code == "customer_urgency":
-            primary_flag_fragments.append("Customer marked this urgent")
-        elif flag.code == "customer_repeated_pressure":
-            primary_flag_fragments.append("Customer applying repeated pressure")
-        elif flag.code == "production_customer_comment_no_response":
-            primary_flag_fragments.append("Recent production customer reply still needs follow-up")
-        elif flag.code == "customer_comment_no_response":
-            primary_flag_fragments.append("Recent customer reply still needs follow-up")
-        elif flag.code == "support_owned_no_recent_updates":
-            primary_flag_fragments.append("Support-owned ticket is stale with no recent update")
-        elif flag.code == "high_priority_no_recent_updates":
-            primary_flag_fragments.append("High-priority ticket is stale with no recent update")
-        elif flag.code == "missing_initial_response":
-            primary_flag_fragments.append("No public initial response yet")
-        elif flag.code == "late_initial_response":
-            primary_flag_fragments.append("Initial response SLA missed")
-        elif flag.code == "status_fields_incomplete":
-            primary_flag_fragments.append("Status fields incomplete")
-        elif flag.code == "sev1_customer_data_follow_up_overdue":
-            primary_flag_fragments.append("SEV1 customer-data follow-up overdue")
-        elif flag.code == "meeting_summary_missing":
-            primary_flag_fragments.append("Meeting summary flag raised")
-
-        if len(primary_flag_fragments) >= 3:
-            break
-
-    fragments.extend(primary_flag_fragments)
+        verbal = _FLAG_VERBAL_TEXT.get(flag.code)
+        if verbal:
+            fragments.append(verbal)
 
     engineering_fragment = _build_engineering_update_paragraph_fragment(ticket.engineering_jira_update_summaries)
     if engineering_fragment:
@@ -2725,9 +2712,6 @@ def _build_ticket_report_summary(ticket: TicketTroubleAssessment) -> str:
     for context_fragment in _context_report_fragments(ticket):
         fragments.append(context_fragment.rstrip("."))
 
-    if ticket.flag_labels:
-        fragments.append(f"Flags: {'; '.join(ticket.flag_labels)}")
-
     return ". ".join(fragment for fragment in fragments if fragment).strip() + "."
 
 
@@ -2740,6 +2724,111 @@ def _populate_ticket_report_fields(ticket: TicketTroubleAssessment) -> TicketTro
     ticket.report_summary = _build_ticket_report_summary(ticket)
     ticket.report_entry = f"{ticket.report_title}\n{ticket.report_summary}"
     return ticket
+
+
+def _truncate_assessment_snippets(ticket: TicketTroubleAssessment, limit: int = 500) -> None:
+    if ticket.first_comment_context and len(ticket.first_comment_context.snippet) > limit:
+        ticket.first_comment_context.snippet = ticket.first_comment_context.snippet[:limit].rstrip() + "..."
+    for item in ticket.comment_context:
+        if len(item.snippet) > limit:
+            item.snippet = item.snippet[:limit].rstrip() + "..."
+    ticket.recent_comment_notes = [
+        note[:limit].rstrip() + "..." if len(note) > limit else note
+        for note in ticket.recent_comment_notes
+    ]
+
+
+def _build_ai_ticket_summary(ticket: TicketTroubleAssessment) -> str:
+    import anthropic
+    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY, max_retries=3)
+
+    escalation = "Escalated" if ticket.is_escalated else "Not escalated"
+    prod = "Production impact" if ticket.production_impact.is_production_issue else "No production signal"
+    flags_text = "\n".join(
+        f"- {_FLAG_VERBAL_TEXT.get(f.code, f.code.replace('_', ' '))}" for f in ticket.flags
+    ) or "None"
+
+    _AI_COMMENT_LIMIT = 1500
+
+    def _trim(text: str) -> str:
+        return text[:_AI_COMMENT_LIMIT].rstrip() + "..." if len(text) > _AI_COMMENT_LIMIT else text
+
+    comment_lines: list[str] = []
+    if ticket.first_comment_context and ticket.first_comment_context.snippet:
+        comment_lines.append(
+            f"[Opening — {ticket.first_comment_context.source} at {ticket.first_comment_context.created_at}]\n"
+            f"{_trim(ticket.first_comment_context.snippet)}"
+        )
+    for item in ticket.comment_context:
+        if item.snippet:
+            comment_lines.append(
+                f"[{item.source} at {item.created_at}]\n{_trim(item.snippet)}"
+            )
+    comments_text = "\n\n".join(comment_lines) or "No comments available."
+
+    engineering = "\n".join(ticket.engineering_jira_update_summaries) or "None"
+
+    prompt = (
+        f"Summarize this support ticket for a daily manager review. "
+        f"Use as many lines as needed — up to 10 — to capture the full picture. "
+        f"Cover: what the customer's problem is, what they have said or done, current status, "
+        f"what engineering found or fixed, what workarounds exist, and what is still open or at risk. "
+        f"Be specific and use detail from the comments. Do not use bullet points.\n\n"
+        f"Ticket: {ticket.subject}\n"
+        f"Status: {escalation} · {prod} · Risk score: {ticket.risk_score}\n"
+        f"Flags:\n{flags_text}\n"
+        f"Engineering updates: {engineering}\n\n"
+        f"Comment history:\n{comments_text}"
+    )
+
+    response = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=400,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return response.content[0].text.strip()
+
+
+def _slim_assessment(assessment: TicketTroubleAssessment) -> None:
+    """Strip fields that are redundant once an AI summary exists.
+    Removes raw comments, duplicate summary copies, and pre-rendered report strings."""
+    assessment.first_comment_context = None
+    assessment.comment_context = []
+    assessment.recent_comment_notes = []
+    assessment.engineering_jira_update_summaries = []
+    assessment.summary = None
+    assessment.report_summary = None
+    assessment.report_entry = None
+    assessment.flag_labels = []
+    assessment.priority_interpretation = None
+
+
+def _enrich_assessments_with_ai(assessments: list[TicketTroubleAssessment]) -> None:
+    """If ANTHROPIC_API_KEY is set, generate AI summaries for in-trouble tickets in parallel
+    then clear raw comment data from the output (the summary replaces it).
+    Without an API key, truncates comment snippets to 500 chars instead."""
+    if ANTHROPIC_API_KEY:
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            futures = {
+                executor.submit(_build_ai_ticket_summary, assessment): assessment
+                for assessment in assessments
+                if assessment.in_trouble
+            }
+            for future in as_completed(futures):
+                assessment = futures[future]
+                try:
+                    assessment.ticket_summary_paragraph = future.result()
+                    _populate_ticket_report_fields(assessment)
+                    _slim_assessment(assessment)
+                except Exception as exc:
+                    logger.warning("AI summary failed for ticket %s: %s", assessment.ticket_id, exc)
+                    _truncate_assessment_snippets(assessment)
+        for assessment in assessments:
+            if not assessment.in_trouble:
+                _slim_assessment(assessment)
+    else:
+        for assessment in assessments:
+            _truncate_assessment_snippets(assessment)
 
 
 def _sort_ticket_assessments_by_importance(
@@ -3087,7 +3176,13 @@ def get_tickets(
 
 @mcp.tool(
     name="scan_tickets_in_trouble",
-    description="Scan recently created tickets and flag tickets likely in trouble based on QA process checks",
+    description=(
+        "Scan recently created tickets and flag tickets likely in trouble based on QA process checks. "
+        "Present results as a ranked list of per-ticket narrative paragraphs — not a table. "
+        "For each ticket include: risk score, ticket number and subject, escalation/production status, "
+        "all trouble flags as plain sentences, engineering updates, and a synthesis of the comment context "
+        "that describes what the customer said and what has happened so far."
+    ),
     structured_output=True,
 )
 def scan_tickets_in_trouble(
@@ -3151,20 +3246,27 @@ def scan_tickets_in_trouble(
                 continue
         assessments.append(assessment)
 
+    _enrich_assessments_with_ai(assessments)
     assessments = _sort_ticket_assessments_by_importance(assessments)
     in_trouble_count = len([ticket for ticket in assessments if ticket.in_trouble])
     return ScanTicketsInTroubleResult(
         created_last_hours=created_last_hours,
         scanned_count=len(assessments),
         in_trouble_count=in_trouble_count,
-        ticket_list_markdown=_build_ticket_trouble_markdown_list(assessments),
+        ticket_list_markdown="" if ANTHROPIC_API_KEY else _build_ticket_trouble_markdown_list(assessments),
         tickets=assessments,
     )
 
 
 @mcp.tool(
     name="scan_crash_tickets_in_trouble",
-    description="Scan open non-internal tickets with a crash-related tag and flag tickets likely in trouble based on QA process checks",
+    description=(
+        "Scan open non-internal tickets with a crash-related tag and flag tickets likely in trouble based on QA process checks. "
+        "Present results as a ranked list of per-ticket narrative paragraphs — not a table. "
+        "For each ticket include: risk score, ticket number and subject, escalation/production status, "
+        "all trouble flags as plain sentences, engineering updates, and a synthesis of the comment context "
+        "that describes what the customer said and what has happened so far."
+    ),
     structured_output=True,
 )
 def scan_crash_tickets_in_trouble(
@@ -3220,6 +3322,7 @@ def scan_crash_tickets_in_trouble(
         )
         assessments.append(assessment)
 
+    _enrich_assessments_with_ai(assessments)
     assessments = _sort_ticket_assessments_by_importance(assessments)
     in_trouble_count = len([ticket for ticket in assessments if ticket.in_trouble])
     return ScanCrashTicketsInTroubleResult(
@@ -3229,7 +3332,7 @@ def scan_crash_tickets_in_trouble(
         total_matches=int(search_result.get("total_matches") or len(assessments)),
         retrieved_count=int(search_result.get("retrieved_count") or len(search_result.get("tickets", []))),
         truncated=bool(search_result.get("truncated")),
-        ticket_list_markdown=_build_ticket_trouble_markdown_list(assessments),
+        ticket_list_markdown="" if ANTHROPIC_API_KEY else _build_ticket_trouble_markdown_list(assessments),
         tickets=assessments,
     )
 
