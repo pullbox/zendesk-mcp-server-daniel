@@ -2232,6 +2232,94 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
         self.assertIn("Thanks, this helps.", markdown)
         self.assertFalse(response.root.isError)
 
+    def test_scan_tickets_in_trouble_markdown_includes_ticket_summary_paragraph(self) -> None:
+        list_payload = {
+            "tickets": [
+                {"id": 42968, "subject": "Supervielle | Android | App crashes on some specific devices", "status": "open", "priority": "high"},
+            ],
+            "count": 1,
+            "page": 1,
+            "per_page": 25,
+            "sort_by": "created_at",
+            "sort_order": "desc",
+            "filters": {
+                "created_last_hours": 4,
+                "exclude_internal": True,
+            },
+            "has_more": False,
+            "next_page": None,
+            "previous_page": None,
+        }
+        full_ticket_payload = {
+            "id": 42968,
+            "subject": "Supervielle | Android | App crashes on some specific devices",
+            "status": "open",
+            "priority": "high",
+            "created_at": "2026-03-05T10:00:00Z",
+            "updated_at": "2026-03-05T12:30:00Z",
+            "requester_id": 1001,
+            "tags": [],
+            "custom_fields": {
+                "Escalation Status": "engaged",
+            },
+        }
+        comments_payload = [
+            {
+                "author_id": 1001,
+                "public": True,
+                "body": "Nicolas Andres is upset. Can we schedule a call today?",
+                "html_body": "<p>Nicolas Andres is upset. Can we schedule a call today?</p>",
+                "created_at": "2026-03-05T10:10:00Z",
+                "attachments": [],
+            },
+            {
+                "author_id": 2002,
+                "public": False,
+                "body": (
+                    "Engineering JIRA Update\n"
+                    "Update Description: Workaround found with ImageReader warm-up in onCreate()."
+                ),
+                "html_body": (
+                    "<p>Engineering JIRA Update</p>"
+                    "<p>Update Description: Workaround found with ImageReader warm-up in onCreate().</p>"
+                ),
+                "created_at": "2026-03-05T10:20:00Z",
+                "attachments": [],
+            },
+        ]
+
+        request = CallToolRequest(
+            method="tools/call",
+            params=CallToolRequestParams(
+                name="scan_tickets_in_trouble",
+                arguments={"created_last_hours": 4, "per_page": 25},
+            ),
+        )
+
+        with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
+            server_module = importlib.import_module("zendesk_mcp_server.server")
+
+        with (
+            patch.object(server_module, "zendesk_client") as mock_client,
+            patch.object(server_module, "_prepare_ticket_payload", return_value=full_ticket_payload),
+        ):
+            mock_client.get_tickets.return_value = list_payload
+            mock_client.get_ticket_comments.return_value = comments_payload
+
+            handler = server_module.mcp._mcp_server.request_handlers[CallToolRequest]
+            response = asyncio.run(handler(request))
+
+        structured = response.root.structuredContent
+        markdown = structured["ticket_list_markdown"]
+        self.assertIn("Summary:", markdown)
+        self.assertIn("Escalated", markdown)
+        self.assertIn("Customer unhappy", markdown)
+        self.assertIn("Meeting summary flag raised", markdown)
+        self.assertIn("Workaround or fix identified", markdown)
+        self.assertIn("ImageReader warm-up in onCreate()", markdown)
+        self.assertIn("ticket_summary_paragraph", structured["tickets"][0])
+        self.assertFalse(response.root.isError)
+
     def test_scan_tickets_in_trouble_flags_missing_public_meeting_summary_from_assignee(self) -> None:
         list_payload = {
             "tickets": [

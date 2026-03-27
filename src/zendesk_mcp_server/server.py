@@ -529,6 +529,7 @@ class TicketTroubleAssessment(BaseModel):
     tom_tovar_comment_count: int = 0
     tom_tovar_latest_comment_at: str | None = None
     tom_tovar_comment_summary: str | None = None
+    ticket_summary_paragraph: str | None = None
 
 
 class ScanTicketsInTroubleResult(BaseModel):
@@ -2135,6 +2136,7 @@ def _build_ticket_trouble_assessment(
             tom_tovar_comment_count=tom_tovar_comment_metadata["tom_tovar_comment_count"],
             tom_tovar_latest_comment_at=tom_tovar_comment_metadata["tom_tovar_latest_comment_at"],
             tom_tovar_comment_summary=tom_tovar_comment_metadata["tom_tovar_comment_summary"],
+            ticket_summary_paragraph="No major trouble signals detected.",
         )
 
     public_comments = [c for c in comments if c.get("public")]
@@ -2412,7 +2414,7 @@ def _build_ticket_trouble_assessment(
     )
     tom_tovar_comment_metadata = _build_tom_tovar_comment_metadata(comments)
 
-    return TicketTroubleAssessment(
+    assessment = TicketTroubleAssessment(
         ticket_id=ticket_id,
         ticket_url=_ticket_url(ticket_id) or "",
         ticket_link=_ticket_link(ticket_id) or "",
@@ -2445,6 +2447,8 @@ def _build_ticket_trouble_assessment(
         tom_tovar_latest_comment_at=tom_tovar_comment_metadata["tom_tovar_latest_comment_at"],
         tom_tovar_comment_summary=tom_tovar_comment_metadata["tom_tovar_comment_summary"],
     )
+    assessment.ticket_summary_paragraph = _build_ticket_summary_paragraph(assessment)
+    return assessment
 
 
 def _build_ticket_trouble_markdown_list(tickets: list[TicketTroubleAssessment]) -> str:
@@ -2471,6 +2475,8 @@ def _build_ticket_trouble_markdown_list(tickets: list[TicketTroubleAssessment]) 
         lines.append(
             f"- {ticket_ref} | {subject} | status={status} | risk={ticket.risk_score}{highlight_text}"
         )
+        if ticket.ticket_summary_paragraph:
+            lines.append(f"  Summary: {ticket.ticket_summary_paragraph}")
         for insight in _comment_context_markdown_insights(ticket.comment_context):
             lines.append(f"  Comment Insight: {insight}")
         for note in ticket.recent_comment_notes[:2]:
@@ -2508,6 +2514,75 @@ def _comment_context_markdown_insights(comment_context: list[TicketCommentContex
         )
 
     return insights[:2]
+
+
+def _build_engineering_update_paragraph_fragment(engineering_jira_update_summaries: list[str]) -> str | None:
+    if not engineering_jira_update_summaries:
+        return None
+
+    latest_summary = engineering_jira_update_summaries[0]
+    match = re.match(r"Engineering update \((?P<signal>[^,]+), [^)]+\): (?P<description>.+)", latest_summary)
+    if not match:
+        return latest_summary
+
+    signal = match.group("signal").strip().lower()
+    description = match.group("description").strip()
+    if signal == "resolution":
+        return f"Workaround or fix identified ({description})"
+    if signal == "eta":
+        return f"Engineering shared ETA/update ({description})"
+    return f"Engineering is on it ({description})"
+
+
+def _build_ticket_summary_paragraph(ticket: TicketTroubleAssessment) -> str:
+    fragments: list[str] = []
+    if ticket.is_escalated:
+        fragments.append("Escalated")
+    if ticket.production_impact.is_production_issue:
+        fragments.append("PROD")
+
+    primary_flag_fragments: list[str] = []
+    for flag in ticket.flags:
+        if flag.code == "production_user_impact":
+            continue
+        if flag.code == "customer_unhappy":
+            primary_flag_fragments.append("Customer unhappy")
+        elif flag.code == "customer_urgency":
+            primary_flag_fragments.append("Customer marked this urgent")
+        elif flag.code == "customer_repeated_pressure":
+            primary_flag_fragments.append("Customer applying repeated pressure")
+        elif flag.code == "production_customer_comment_no_response":
+            primary_flag_fragments.append("Recent production customer reply still needs follow-up")
+        elif flag.code == "customer_comment_no_response":
+            primary_flag_fragments.append("Recent customer reply still needs follow-up")
+        elif flag.code == "support_owned_no_recent_updates":
+            primary_flag_fragments.append("Support-owned ticket is stale with no recent update")
+        elif flag.code == "high_priority_no_recent_updates":
+            primary_flag_fragments.append("High-priority ticket is stale with no recent update")
+        elif flag.code == "missing_initial_response":
+            primary_flag_fragments.append("No public initial response yet")
+        elif flag.code == "late_initial_response":
+            primary_flag_fragments.append("Initial response SLA missed")
+        elif flag.code == "status_fields_incomplete":
+            primary_flag_fragments.append("Status fields incomplete")
+        elif flag.code == "sev1_customer_data_follow_up_overdue":
+            primary_flag_fragments.append("SEV1 customer-data follow-up overdue")
+        elif flag.code == "meeting_summary_missing":
+            primary_flag_fragments.append("Meeting summary flag raised")
+
+        if len(primary_flag_fragments) >= 3:
+            break
+
+    fragments.extend(primary_flag_fragments)
+
+    engineering_fragment = _build_engineering_update_paragraph_fragment(ticket.engineering_jira_update_summaries)
+    if engineering_fragment:
+        fragments.append(engineering_fragment)
+
+    if not fragments:
+        fragments.append("No major trouble signals detected")
+
+    return " \u00b7 ".join(fragments[:2]) + (". " + ". ".join(fragments[2:]) if len(fragments) > 2 else ".")
 
 
 def _sort_ticket_assessments_by_importance(
