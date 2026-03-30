@@ -2738,7 +2738,7 @@ def _truncate_assessment_snippets(ticket: TicketTroubleAssessment, limit: int = 
     ]
 
 
-def _build_ai_ticket_summary(ticket: TicketTroubleAssessment) -> str:
+def _build_ai_ticket_summary(ticket: TicketTroubleAssessment) -> tuple[str, dict[str, bool]]:
     import anthropic
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY, max_retries=3)
 
@@ -2769,44 +2769,95 @@ def _build_ai_ticket_summary(ticket: TicketTroubleAssessment) -> str:
     engineering = "\n".join(ticket.engineering_jira_update_summaries) or "None"
 
     prompt = (
-        f"Summarize this support ticket for a daily manager review. "
-        f"Use as many lines as needed — up to 10 — to capture the full picture. "
-        f"Cover: what the customer's problem is, what they have said or done, current status, "
-        f"what engineering found or fixed, what workarounds exist, and what is still open or at risk. "
-        f"Be specific and use detail from the comments. Do not use bullet points.\n\n"
+        f"Analyze this support ticket and respond with a JSON object with exactly two keys:\n"
+        f"1. \"flags\": an object with these boolean fields based on the comment history:\n"
+        f"   - \"customer_urgency\": true if customer expressed urgency beyond a standard request "
+        f"(e.g. launch blocking, losing users, CEO pressure, regulatory deadline, production down)\n"
+        f"   - \"customer_unhappy\": true if customer expressed frustration, dissatisfaction, or disappointment\n"
+        f"   - \"customer_repeated_pressure\": true if customer sent multiple follow-ups or shows escalating tone\n"
+        f"   - \"meeting_summary_missing\": true if a call or meeting was mentioned or requested "
+        f"but no outcome or summary was documented afterward\n"
+        f"   - \"crash_process_gap\": true if this is a crash ticket and no stacktrace was shared "
+        f"or explicitly requested in the comments\n"
+        f"2. \"summary\": a narrative paragraph (up to 10 lines) for a daily manager review covering "
+        f"what happened, current status, and key risks. Be specific. No bullet points.\n\n"
+        f"Respond with valid JSON only. No text outside the JSON.\n\n"
         f"Ticket: {ticket.subject}\n"
         f"Status: {escalation} · {prod} · Risk score: {ticket.risk_score}\n"
-        f"Flags:\n{flags_text}\n"
+        f"Flags already detected:\n{flags_text}\n"
         f"Engineering updates: {engineering}\n\n"
         f"Comment history:\n{comments_text}"
     )
 
     response = client.messages.create(
         model="claude-haiku-4-5-20251001",
-        max_tokens=400,
+        max_tokens=600,
         messages=[{"role": "user", "content": prompt}],
     )
-    return response.content[0].text.strip()
+
+    raw = response.content[0].text.strip()
+    try:
+        data = json.loads(raw)
+        summary = str(data.get("summary", "")).strip()
+        ai_flags = {k: bool(v) for k, v in data.get("flags", {}).items()}
+        return summary, ai_flags
+    except (json.JSONDecodeError, AttributeError):
+        logger.warning("AI response for ticket %s was not valid JSON — using as plain summary", ticket.ticket_id)
+        return raw, {}
 
 
-def _slim_assessment(assessment: TicketTroubleAssessment) -> None:
-    """Strip fields that are redundant once an AI summary exists.
-    Removes raw comments, duplicate summary copies, and pre-rendered report strings."""
-    assessment.first_comment_context = None
-    assessment.comment_context = []
-    assessment.recent_comment_notes = []
-    assessment.engineering_jira_update_summaries = []
+_AI_AUGMENT_FLAG_SEVERITIES: dict[str, str] = {
+    "customer_urgency": "high",
+    "customer_unhappy": "high",
+    "customer_repeated_pressure": "high",
+    "meeting_summary_missing": "medium",
+    "crash_process_gap": "high",
+}
+
+
+def _augment_flags_with_ai(assessment: TicketTroubleAssessment, ai_flags: dict[str, bool]) -> None:
+    """Add Haiku-detected flags that Python missed. Updates risk_score accordingly."""
+    existing_codes = {f.code for f in assessment.flags}
+    added_weight = 0
+    for code, detected in ai_flags.items():
+        if detected and code not in existing_codes:
+            severity = _AI_AUGMENT_FLAG_SEVERITIES.get(code, "medium")
+            assessment.flags.append(TicketTroubleFlag(
+                code=code,
+                severity=severity,
+                message=f"AI-detected: {_FLAG_VERBAL_TEXT.get(code, code.replace('_', ' '))}",
+            ))
+            added_weight += TROUBLE_FLAG_WEIGHTS.get(code, SEVERITY_FALLBACK_WEIGHTS.get(severity, 15))
+    if added_weight > 0:
+        assessment.risk_score = min(100, assessment.risk_score + added_weight)
+        assessment.in_trouble = True
+
+
+def _slim_assessment_base(assessment: TicketTroubleAssessment) -> None:
+    """Strip always-redundant fields that add no report value in any path.
+    Safe to call regardless of whether AI summarization ran."""
     assessment.summary = None
-    assessment.report_summary = None
     assessment.report_entry = None
     assessment.flag_labels = []
     assessment.priority_interpretation = None
+    assessment.ticket_url = ""
+    assessment.recent_comment_notes = []
+
+
+def _slim_assessment_ai(assessment: TicketTroubleAssessment) -> None:
+    """Strip raw comment data and remaining duplicates after AI has summarized them.
+    Only call when an AI summary was successfully generated."""
+    assessment.first_comment_context = None
+    assessment.comment_context = []
+    assessment.engineering_jira_update_summaries = []
+    assessment.report_summary = None
 
 
 def _enrich_assessments_with_ai(assessments: list[TicketTroubleAssessment]) -> None:
     """If ANTHROPIC_API_KEY is set, generate AI summaries for in-trouble tickets in parallel
     then clear raw comment data from the output (the summary replaces it).
-    Without an API key, truncates comment snippets to 500 chars instead."""
+    Without an API key, truncates comment snippets to 500 chars instead.
+    Base redundant fields are stripped in both paths."""
     if ANTHROPIC_API_KEY:
         with ThreadPoolExecutor(max_workers=3) as executor:
             futures = {
@@ -2817,18 +2868,21 @@ def _enrich_assessments_with_ai(assessments: list[TicketTroubleAssessment]) -> N
             for future in as_completed(futures):
                 assessment = futures[future]
                 try:
-                    assessment.ticket_summary_paragraph = future.result()
+                    summary, ai_flags = future.result()
+                    _augment_flags_with_ai(assessment, ai_flags)
+                    flag_line = _build_ticket_summary_paragraph(assessment)
+                    assessment.ticket_summary_paragraph = f"{summary}\n\n{flag_line}" if summary else flag_line
                     _populate_ticket_report_fields(assessment)
-                    _slim_assessment(assessment)
+                    _slim_assessment_ai(assessment)
                 except Exception as exc:
                     logger.warning("AI summary failed for ticket %s: %s", assessment.ticket_id, exc)
                     _truncate_assessment_snippets(assessment)
-        for assessment in assessments:
-            if not assessment.in_trouble:
-                _slim_assessment(assessment)
     else:
         for assessment in assessments:
             _truncate_assessment_snippets(assessment)
+
+    for assessment in assessments:
+        _slim_assessment_base(assessment)
 
 
 def _sort_ticket_assessments_by_importance(
