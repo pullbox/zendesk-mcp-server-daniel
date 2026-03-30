@@ -3493,6 +3493,7 @@ def get_important_tickets_today(
         )
 
     assessments = _sort_ticket_assessments_by_importance(assessments)
+    _enrich_assessments_with_ai(assessments)
     in_trouble_count = len([ticket for ticket in assessments if ticket.in_trouble])
     return GetImportantTicketsTodayResult(
         filters=ImportantTodayFilters(
@@ -3504,7 +3505,7 @@ def get_important_tickets_today(
         ),
         candidate_count=len(assessments),
         in_trouble_count=in_trouble_count,
-        ticket_list_markdown=_build_ticket_trouble_markdown_list(assessments),
+        ticket_list_markdown="" if ANTHROPIC_API_KEY else _build_ticket_trouble_markdown_list(assessments),
         tickets=assessments,
     )
 
