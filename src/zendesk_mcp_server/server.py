@@ -277,6 +277,13 @@ def _ticket_link(ticket_id: int | None) -> str | None:
     return f"[{ticket_id}]({ticket_url})"
 
 
+def _format_minutes(minutes: int) -> str:
+    """Return minutes as 'Xm' or 'hh:mm' when the value exceeds 120 minutes."""
+    if minutes <= 120:
+        return f"{minutes}m"
+    return f"{minutes // 60}:{minutes % 60:02d}"
+
+
 def _format_display_datetime(value: str | None) -> str:
     if not value:
         return "N/A"
@@ -2310,7 +2317,7 @@ def _build_ticket_trouble_assessment(
                     severity="high",
                     message=(
                         "No public agent response found after "
-                        f"{response_delay_minutes}m (SLA {initial_response_sla_minutes}m)."
+                        f"{_format_minutes(response_delay_minutes)} (SLA {initial_response_sla_minutes}m)."
                     ),
                 )
             )
@@ -2321,7 +2328,7 @@ def _build_ticket_trouble_assessment(
                 TicketTroubleFlag(
                     code="late_initial_response",
                     severity="high",
-                    message=f"Initial public response took {response_minutes}m (SLA {initial_response_sla_minutes}m).",
+                    message=f"Initial public response took {_format_minutes(response_minutes)} (SLA {initial_response_sla_minutes}m).",
                 )
             )
 
