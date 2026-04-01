@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field
 
+from zendesk_mcp_server.infrastructure.zendesk.query_builder import build_custom_field_scan_query
 from zendesk_mcp_server.ticket_analysis import build_batch_ticket_review_input, build_ticket_analysis_input
 from zendesk_mcp_server.ticket_display import apply_ticket_field_displays
 from zendesk_mcp_server.ticket_field_metadata import TicketFieldOptionResolver
@@ -3357,7 +3358,8 @@ def scan_tickets_in_trouble(
 @mcp.tool(
     name="scan_crash_tickets_in_trouble",
     description=(
-        "Scan open non-internal tickets with a crash-related tag and flag tickets likely in trouble based on QA process checks. "
+        "Scan open non-internal tickets that have a crash-related tag OR an active escalation status "
+        "(Escalated, Eng. Review, or Comm.Review), and flag tickets likely in trouble based on QA process checks. "
         "Present results as a ranked list of per-ticket narrative paragraphs — not a table. "
         "For each ticket include: risk score, ticket number and subject, escalation/production status, "
         "all trouble flags as plain sentences (including any production/priority mismatch where a production issue "
@@ -3392,7 +3394,7 @@ def scan_crash_tickets_in_trouble(
         Field(description="Threshold in hours for stale escalated high-priority or stale support-owned tickets."),
     ] = DEFAULT_HIGH_PRIORITY_STALE_HOURS,
 ) -> ScanCrashTicketsInTroubleResult:
-    search_result = zendesk_client.search_open_tickets_by_tag(
+    crash_tag_result = zendesk_client.search_open_tickets_by_tag(
         tag=tag,
         max_results=max_results,
         per_page=per_page,
@@ -3400,8 +3402,35 @@ def scan_crash_tickets_in_trouble(
         exclude_internal=exclude_internal,
     )
 
+    # Collect crash-tag tickets first, then append escalation-status tickets (deduplicated)
+    seen_ids: set[int] = set()
+    all_tickets: list[dict[str, Any]] = []
+    for t in crash_tag_result.get("tickets", []):
+        tid = t.get("id")
+        if tid is not None and tid not in seen_ids:
+            seen_ids.add(tid)
+            all_tickets.append(t)
+
+    escalation_truncated = False
+    escalation_display_names = {"Escalated", "Eng. Review", "Comm.Review"}
+    escalation_search_terms = ticket_field_option_resolver.get_escalation_status_search_terms(escalation_display_names)
+    for term in escalation_search_terms:
+        query = build_custom_field_scan_query(custom_field_term=term, exclude_internal=exclude_internal)
+        esc_result = zendesk_client.search_open_tickets_by_query(
+            query=query,
+            max_results=max_results,
+            per_page=per_page,
+        )
+        for t in esc_result.get("tickets", []):
+            tid = t.get("id")
+            if tid is not None and tid not in seen_ids:
+                seen_ids.add(tid)
+                all_tickets.append(t)
+        if esc_result.get("truncated"):
+            escalation_truncated = True
+
     assessments: list[TicketTroubleAssessment] = []
-    for ticket in search_result.get("tickets", []):
+    for ticket in all_tickets:
         if str(ticket.get("status", "")).lower() != "open":
             continue
         ticket_id = ticket.get("id")
@@ -3426,9 +3455,9 @@ def scan_crash_tickets_in_trouble(
         tag=tag,
         scanned_count=len(assessments),
         in_trouble_count=in_trouble_count,
-        total_matches=int(search_result.get("total_matches") or len(assessments)),
-        retrieved_count=int(search_result.get("retrieved_count") or len(search_result.get("tickets", []))),
-        truncated=bool(search_result.get("truncated")),
+        total_matches=int(crash_tag_result.get("total_matches") or len(crash_tag_result.get("tickets", []))),
+        retrieved_count=len(all_tickets),
+        truncated=bool(crash_tag_result.get("truncated")) or escalation_truncated,
         ticket_list_markdown="" if ANTHROPIC_API_KEY else _build_ticket_trouble_markdown_list(assessments),
         tickets=assessments,
     )

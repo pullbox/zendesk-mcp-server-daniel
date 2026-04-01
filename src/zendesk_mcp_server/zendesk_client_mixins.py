@@ -339,6 +339,30 @@ class ZendeskSearchMixin:
         except Exception as e:
             raise Exception(f"Failed to search tickets by tag {tag}: {str(e)}")
 
+    def search_open_tickets_by_query(
+        self,
+        *,
+        query: str,
+        max_results: int = 250,
+        per_page: int = 100,
+    ) -> Dict[str, Any]:
+        """
+        Search tickets by an arbitrary pre-built Zendesk search query.
+        """
+        try:
+            now = self._current_utc_now()
+            return self.tickets_repository.search_open_tickets_by_query(
+                query=query,
+                max_results=max_results,
+                per_page=per_page,
+                now=now,
+            )
+        except urllib.error.HTTPError as e:
+            error_body = e.read().decode() if e.fp else "No response body"
+            raise Exception(f"Failed to search tickets by query: HTTP {e.code} - {e.reason}. {error_body}")
+        except Exception as e:
+            raise Exception(f"Failed to search tickets by query: {str(e)}")
+
 
 class ZendeskWriteMixin:
     def post_comment(self, ticket_id: int, comment: str, public: bool = True) -> str:

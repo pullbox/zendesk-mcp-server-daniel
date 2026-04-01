@@ -1509,7 +1509,7 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
             response = asyncio.run(handler(request))
 
         structured = response.root.structuredContent
-        self.assertIn("#100 | ACME | Android | Crash", structured["ticket_list_markdown"])
+        self.assertIn("tickets/100) | ACME | Android | Crash", structured["ticket_list_markdown"])
         self.assertIn("ACME | Android | Crash", structured["ticket_list_markdown"])
         self.assertFalse(response.root.isError)
 
@@ -1588,7 +1588,7 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
             response = asyncio.run(handler(request))
 
         structured = response.root.structuredContent
-        self.assertIn("#42468 | ACME | Android | Login issue", structured["ticket_list_markdown"])
+        self.assertIn("tickets/42468) | ACME | Android | Login issue", structured["ticket_list_markdown"])
         self.assertIn("Flags: Customer urgent", structured["ticket_list_markdown"])
         self.assertIn("report_summary", structured["tickets"][0])
         self.assertIn("Customer urgent", structured["tickets"][0]["report_summary"])
@@ -1773,11 +1773,13 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
         with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
             server_module = importlib.import_module("zendesk_mcp_server.server")
 
+        empty_search_result = {"tickets": [], "total_matches": 0, "retrieved_count": 0, "truncated": False}
         with (
             patch.object(server_module, "zendesk_client") as mock_client,
             patch.object(server_module, "_prepare_ticket_payload", return_value=full_ticket_payload),
         ):
             mock_client.search_open_tickets_by_tag.return_value = search_payload
+            mock_client.search_open_tickets_by_query.return_value = empty_search_result
             mock_client.get_ticket_comments.return_value = comments_payload
 
             handler = server_module.mcp._mcp_server.request_handlers[CallToolRequest]
@@ -1844,11 +1846,13 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
         with patch("zendesk_mcp_server.zendesk_client.Zenpy"):
             server_module = importlib.import_module("zendesk_mcp_server.server")
 
+        empty_search_result = {"tickets": [], "total_matches": 0, "retrieved_count": 0, "truncated": False}
         with (
             patch.object(server_module, "zendesk_client") as mock_client,
             patch.object(server_module, "_prepare_ticket_payload", return_value=full_ticket_payload),
         ):
             mock_client.search_open_tickets_by_tag.return_value = search_payload
+            mock_client.search_open_tickets_by_query.return_value = empty_search_result
 
             handler = server_module.mcp._mcp_server.request_handlers[CallToolRequest]
             response = asyncio.run(handler(request))
@@ -2380,7 +2384,7 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
 
         structured = response.root.structuredContent
         markdown = structured["ticket_list_markdown"]
-        self.assertIn("#42968 | Supervielle | Android | App crashes on some specific devices", markdown)
+        self.assertIn("tickets/42968) | Supervielle | Android | App crashes on some specific devices", markdown)
         self.assertIn("Escalated", markdown)
         self.assertIn("Customer unhappy", markdown)
         self.assertIn("Flags: Customer unhappy", markdown)
@@ -3120,7 +3124,7 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
         ticket = structured["tickets"][0]
         flag_codes = [flag["code"] for flag in ticket["flags"]]
         self.assertIn("production_customer_comment_no_response", flag_codes)
-        self.assertIn("Production customer awaiting response", structured["ticket_list_markdown"])
+        self.assertIn("Recent production customer reply still needs follow-up", structured["ticket_list_markdown"])
         self.assertGreaterEqual(ticket["risk_score"], 56)
         self.assertFalse(response.root.isError)
 
@@ -4082,7 +4086,7 @@ class TestServerGetTicketsLastFiveHours(unittest.TestCase):
         ))
 
         markdown = server_module._build_ticket_trouble_markdown_list([assessment])
-        self.assertIn("Customer repeated pressure", markdown)
+        self.assertIn("Customer applying repeated pressure", markdown)
 
     def test_ticket_with_uat_only_signals_is_not_flagged_as_production_issue(self) -> None:
         with patch("zendesk_mcp_server.zendesk_client.Zenpy"):

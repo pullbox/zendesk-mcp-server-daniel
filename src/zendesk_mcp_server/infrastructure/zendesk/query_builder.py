@@ -211,6 +211,17 @@ def build_partial_text_search_query(
     return " ".join(query_parts), None
 
 
+def build_custom_field_scan_query(
+    *,
+    custom_field_term: str,
+    exclude_internal: bool,
+) -> str:
+    query_parts = ["type:ticket", custom_field_term, "status:open"]
+    if exclude_internal:
+        query_parts.append("-tags:internal")
+    return " ".join(query_parts)
+
+
 def build_tag_scan_query(
     *,
     tag: str,

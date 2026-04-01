@@ -47,6 +47,8 @@ class TicketFieldOptionResolver:
     def __init__(self, zendesk_client: Any):
         self.zendesk_client = zendesk_client
         self.option_maps: dict[str, dict[str, str]] = {}
+        self._field_id_map: dict[str, int] = {}
+        self._reverse_option_maps: dict[str, dict[str, str]] = {}  # canonical_name -> {display_name -> raw_value}
 
     def load(self) -> None:
         try:
@@ -57,6 +59,8 @@ class TicketFieldOptionResolver:
             return
 
         option_maps: dict[str, dict[str, str]] = {}
+        field_id_map: dict[str, int] = {}
+        reverse_option_maps: dict[str, dict[str, str]] = {}
         for field in field_definitions:
             title = field.get("title")
             if title not in RELEVANT_TICKET_FIELD_ALIASES:
@@ -69,6 +73,8 @@ class TicketFieldOptionResolver:
             if field_id is None:
                 continue
 
+            field_id_map[canonical_title] = int(field_id)
+
             try:
                 options = self.zendesk_client.get_ticket_field_options(int(field_id))
             except Exception as exc:
@@ -76,18 +82,38 @@ class TicketFieldOptionResolver:
                 continue
 
             value_map = {}
+            reverse_map = {}
             for option in options:
                 raw_value = option.get("value")
                 display_name = option.get("name")
                 normalized_value = normalize_field_value(raw_value)
                 if normalized_value and isinstance(display_name, str):
                     value_map[normalized_value] = display_name
+                if raw_value and isinstance(display_name, str):
+                    reverse_map[display_name] = raw_value
 
             if value_map:
                 option_maps[canonical_title] = value_map
+            if reverse_map:
+                reverse_option_maps[canonical_title] = reverse_map
 
         self.option_maps = option_maps
+        self._field_id_map = field_id_map
+        self._reverse_option_maps = reverse_option_maps
         logger.info(f"Loaded ticket field option maps for {len(option_maps)} relevant fields")
+
+    def get_escalation_status_search_terms(self, display_names: set[str]) -> list[str]:
+        """Return Zendesk custom_field search terms for the given escalation status display names."""
+        field_id = self._field_id_map.get("Escalation Status")
+        if field_id is None:
+            return []
+        reverse_map = self._reverse_option_maps.get("Escalation Status", {})
+        terms = []
+        for display_name in sorted(display_names):
+            raw_value = reverse_map.get(display_name)
+            if raw_value:
+                terms.append(f"custom_field_{field_id}:{raw_value}")
+        return terms
 
     def translate(self, field_name: str, raw_value: Any) -> Any:
         normalized_value = normalize_field_value(raw_value)

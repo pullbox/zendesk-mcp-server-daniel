@@ -11,6 +11,7 @@ from zendesk_mcp_server.infrastructure.zendesk.query_builder import (
     build_tag_scan_query,
     build_solved_tickets_query,
     build_text_search_query,
+    build_custom_field_scan_query,
 )
 
 logger = logging.getLogger("zendesk-mcp-client")
@@ -346,23 +347,14 @@ class TicketsRepository:
             "previous_page": page - 1 if page > 1 else None,
         }
 
-    def search_open_tickets_by_tag(
+    def _run_search_paginated(
         self,
         *,
-        tag: str,
+        query: str,
         max_results: int,
         per_page: int,
-        include_solved: bool,
-        exclude_internal: bool,
         now: datetime,
     ) -> Dict[str, Any]:
-        per_page = max(1, min(per_page, 100))
-        max_results = max(1, min(max_results, 1000))
-
-        query = build_tag_scan_query(
-            tag=tag,
-            exclude_internal=exclude_internal,
-        )
         params = {
             "query": query,
             "page": "1",
@@ -377,7 +369,7 @@ class TicketsRepository:
         page = 1
 
         while url and len(collected) < max_results:
-            logger.info("Fetching tag-scan page %s: %s", page, url)
+            logger.info("Fetching search page %s: %s", page, url)
             data = self._json_get(url)
             if total_matches is None and isinstance(data.get("count"), int):
                 total_matches = data["count"]
@@ -402,3 +394,30 @@ class TicketsRepository:
             "retrieved_count": retrieved_count,
             "truncated": truncated,
         }
+
+    def search_open_tickets_by_tag(
+        self,
+        *,
+        tag: str,
+        max_results: int,
+        per_page: int,
+        include_solved: bool,
+        exclude_internal: bool,
+        now: datetime,
+    ) -> Dict[str, Any]:
+        per_page = max(1, min(per_page, 100))
+        max_results = max(1, min(max_results, 1000))
+        query = build_tag_scan_query(tag=tag, exclude_internal=exclude_internal)
+        return self._run_search_paginated(query=query, max_results=max_results, per_page=per_page, now=now)
+
+    def search_open_tickets_by_query(
+        self,
+        *,
+        query: str,
+        max_results: int,
+        per_page: int,
+        now: datetime,
+    ) -> Dict[str, Any]:
+        per_page = max(1, min(per_page, 100))
+        max_results = max(1, min(max_results, 1000))
+        return self._run_search_paginated(query=query, max_results=max_results, per_page=per_page, now=now)
