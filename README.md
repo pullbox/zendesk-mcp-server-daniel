@@ -201,7 +201,7 @@ Fetch ticket list with pagination and optional filters.
 
 ### get_important_tickets_today
 
-Find tickets that matter today based on current attention needs, not just creation time.
+Find tickets that matter today based on current attention needs, not just creation time. Flags any production issue where `Eng Priority` does not reflect Sev1.
 
 - What it does:
   - fetches tickets updated in the last `recent_activity_hours`
@@ -304,6 +304,7 @@ Scan non-solved tickets created in the last N hours and flag likely QA/process i
 - Flag conditions:
   - `title_incorrect`: subject does not match the expected `Customer | Context | Issue` structure.
   - `production_user_impact`: ticket text/comments indicate a live production issue affecting real users/customers.
+  - `production_priority_mismatch`: ticket signals a production issue but `Eng Priority` is populated and does not reflect Sev1 — flags cases where engineering severity understates the customer impact.
   - `status_fields_incomplete`: one or more of `Status With`, `Support Stage`, or `Release Stage` is missing.
   - `missing_initial_response`: no public agent reply after the configured first-response SLA, unless the first comment was internal.
   - `late_initial_response`: first public agent reply exceeded the configured first-response SLA.

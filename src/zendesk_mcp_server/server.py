@@ -610,6 +610,7 @@ TROUBLE_FLAG_WEIGHTS: dict[str, int] = {
     "late_stacktrace_request": 44,
     "title_incorrect": 45,
     "production_user_impact": 35,
+    "production_priority_mismatch": 55,
 }
 SEVERITY_FALLBACK_WEIGHTS = {"high": 30, "medium": 15, "low": 5}
 SEVERITY_RANK = {"high": 3, "medium": 2, "low": 1}
@@ -1111,6 +1112,30 @@ def _is_sev1_ticket(ticket: dict[str, Any], is_escalated: bool) -> bool:
         custom_fields.get("Eng Priority"),
     ]
     return any(_is_sev1_priority_value(candidate) for candidate in priority_candidates)
+
+
+def _build_production_priority_mismatch_flag(
+    ticket: dict[str, Any],
+    production_impact: "ProductionImpactAssessment",
+) -> "TicketTroubleFlag | None":
+    """Flag when a ticket appears to be a production issue but ENG Priority is set to something other than sev1."""
+    if not production_impact.is_production_issue:
+        return None
+    custom_fields = ticket.get("custom_fields") if isinstance(ticket.get("custom_fields"), dict) else {}
+    eng_priority_raw = custom_fields.get("Eng Priority")
+    normalized = _normalize_priority_value(eng_priority_raw)
+    if not normalized:
+        return None
+    if _is_sev1_priority_value(eng_priority_raw):
+        return None
+    return TicketTroubleFlag(
+        code="production_priority_mismatch",
+        severity="high",
+        message=(
+            f"Ticket signals a production issue but ENG Priority is set to \"{eng_priority_raw}\" rather than Sev1. "
+            "Review whether the engineering severity reflects the customer impact."
+        ),
+    )
 
 
 def _comment_requests_customer_data(comment: dict[str, Any]) -> bool:
@@ -2260,6 +2285,13 @@ def _build_ticket_trouble_assessment(
             )
         )
 
+    production_priority_mismatch_flag = _build_production_priority_mismatch_flag(
+        ticket=ticket,
+        production_impact=production_impact,
+    )
+    if production_priority_mismatch_flag is not None:
+        flags.append(production_priority_mismatch_flag)
+
     customer_urgency_flag = _build_customer_urgency_flag(
         ticket=ticket,
         comments=comments,
@@ -2603,6 +2635,7 @@ def _flag_label(flag: TicketTroubleFlag) -> str:
     labels = {
         "customer_urgency": "Customer urgent",
         "production_user_impact": "Production impact",
+        "production_priority_mismatch": "Production issue / priority mismatch",
         "production_customer_comment_no_response": "Production customer awaiting response",
         "customer_comment_no_response": "Customer awaiting response",
         "customer_unhappy": "Customer unhappy",
@@ -2677,6 +2710,7 @@ _FLAG_VERBAL_TEXT: dict[str, str] = {
     "ticket_report_request": "Customer requested ticket report",
     "late_stacktrace_request": "Late stacktrace request",
     "crash_process_gap": "Crash process gap — no stacktrace collected",
+    "production_priority_mismatch": "Production issue but ENG Priority is not Sev1",
     "title_incorrect": "Title format issue",
     "internal_tag_title_mismatch": "Internal tag/title mismatch",
 }
@@ -3241,7 +3275,8 @@ def get_tickets(
         "Scan recently created tickets and flag tickets likely in trouble based on QA process checks. "
         "Present results as a ranked list of per-ticket narrative paragraphs — not a table. "
         "For each ticket include: risk score, ticket number and subject, escalation/production status, "
-        "all trouble flags as plain sentences, engineering updates, and a synthesis of the comment context "
+        "all trouble flags as plain sentences (including any production/priority mismatch where a production issue "
+        "has an ENG Priority that does not reflect Sev1), engineering updates, and a synthesis of the comment context "
         "that describes what the customer said and what has happened so far."
     ),
     structured_output=True,
@@ -3325,7 +3360,8 @@ def scan_tickets_in_trouble(
         "Scan open non-internal tickets with a crash-related tag and flag tickets likely in trouble based on QA process checks. "
         "Present results as a ranked list of per-ticket narrative paragraphs — not a table. "
         "For each ticket include: risk score, ticket number and subject, escalation/production status, "
-        "all trouble flags as plain sentences, engineering updates, and a synthesis of the comment context "
+        "all trouble flags as plain sentences (including any production/priority mismatch where a production issue "
+        "has an ENG Priority that does not reflect Sev1), engineering updates, and a synthesis of the comment context "
         "that describes what the customer said and what has happened so far."
     ),
     structured_output=True,
@@ -3402,7 +3438,8 @@ def scan_crash_tickets_in_trouble(
     name="get_important_tickets_today",
     description=(
         "Find tickets that matter today based on recent activity or stale follow-up risk, "
-        "then rank them with the ticket trouble assessment"
+        "then rank them with the ticket trouble assessment. "
+        "Flag any production issue where ENG Priority does not reflect Sev1."
     ),
     structured_output=True,
 )
