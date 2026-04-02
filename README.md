@@ -341,6 +341,29 @@ Scan open, non-internal tickets with a crash-related tag and flag likely QA/proc
   - Structured result with `tag`, `scanned_count`, `in_trouble_count`, `total_matches`, `retrieved_count`, `truncated`, `ticket_list_markdown`, and per-ticket trouble assessments.
   - Same output format as `scan_tickets_in_trouble` — ranked per-ticket paragraphs with clickable links, risk scores, AI-generated summaries, and flag augmentation when `ANTHROPIC_API_KEY` is set.
 
+### scan_unanswered_tickets
+
+Scan all open tickets and surface those where a customer posted a public comment and Appdome has not replied (publicly or internally) since. Only tickets silent for at least `min_days_threshold` days are included. Results are sorted longest wait first.
+
+- Input:
+  - `min_days_threshold` (default `3`) — minimum days without an Appdome reply
+  - `max_tickets` (default `200`, max `500`) — open tickets to inspect
+  - `per_page` (default `100`, max `100`) — Zendesk API page size
+  - `exclude_internal` (default `true`)
+  - `agent` (optional) — filter by assignee (id, email, or name)
+  - `organization` (optional) — filter by organization name
+
+- Output:
+  - `scanned_count` — open tickets inspected
+  - `unanswered_count` — tickets included in results
+  - `min_days_threshold` — threshold used
+  - Per-ticket fields: `ticket_id`, `ticket_url`, `ticket_link`, `subject`, `status`, `organization`, `assignee_id`, `hours_waiting`, `days_waiting`, `alert_level`, `last_customer_comment_at`, `last_customer_comment_snippet`, `is_production`
+
+- Alert levels based on time since last customer comment (no Appdome reply):
+  - `warning` — 3–7 days
+  - `high` — 7–14 days
+  - `critical` — 14+ days
+
 ### sample_solved_tickets_for_agent
 
 Randomly sample solved tickets for a specific agent in a date window.
