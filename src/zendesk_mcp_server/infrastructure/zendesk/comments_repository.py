@@ -24,6 +24,7 @@ class CommentsRepository:
                         "id": attachment.get("id"),
                         "file_name": attachment.get("file_name"),
                         "content_type": attachment.get("content_type"),
+                        "content_url": attachment.get("content_url"),
                         "size": attachment.get("size"),
                         "inline": attachment.get("inline"),
                     }
