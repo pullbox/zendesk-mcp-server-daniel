@@ -278,11 +278,14 @@ class ZendeskSearchMixin:
         include_solved: bool = False,
         exclude_internal: bool = False,
         comment_author: Optional[str] = None,
+        comment_visibility: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Search tickets by free-text phrase across Zendesk indexed ticket content.
 
         Supports optional organization, timeframe, status, and comment-author narrowing.
+        When comment_visibility is 'public' or 'private', post-filters to tickets that
+        have at least one comment of that visibility containing the phrase.
         """
         try:
             phrase_str = str(phrase).strip()
@@ -290,7 +293,7 @@ class ZendeskSearchMixin:
                 raise ValueError("phrase is required")
             now = self._current_utc_now()
             resolved_comment_author = self._resolve_filter_user_identifier(comment_author)
-            return self.tickets_repository.search_tickets_by_text(
+            result = self.tickets_repository.search_tickets_by_text(
                 phrase=phrase_str,
                 page=page,
                 per_page=per_page,
@@ -305,6 +308,30 @@ class ZendeskSearchMixin:
                 comment_author=resolved_comment_author,
                 now=now,
             )
+
+            normalized_visibility = comment_visibility.strip().lower() if comment_visibility else None
+            if normalized_visibility in ("public", "private"):
+                want_public = normalized_visibility == "public"
+                phrase_lower = phrase_str.lower()
+                filtered = []
+                for ticket in result["tickets"]:
+                    ticket_id = ticket.get("id")
+                    if ticket_id is None:
+                        continue
+                    comments = self.comments_repository.get_ticket_comments(int(ticket_id))
+                    if any(
+                        c.get("public") is want_public
+                        and phrase_lower in (c.get("body") or "").lower()
+                        for c in comments
+                    ):
+                        filtered.append(ticket)
+                result = dict(result)
+                result["tickets"] = filtered
+                result["count"] = len(filtered)
+                result["filters"] = dict(result["filters"])
+                result["filters"]["comment_visibility"] = normalized_visibility
+
+            return result
         except urllib.error.HTTPError as e:
             error_body = e.read().decode() if e.fp else "No response body"
             raise Exception(f"Failed to search tickets by text: HTTP {e.code} - {e.reason}. {error_body}")

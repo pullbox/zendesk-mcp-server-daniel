@@ -412,6 +412,7 @@ class SearchTicketsByTextFilters(BaseModel):
     include_solved: bool = False
     exclude_internal: bool = False
     comment_author: str | None = None
+    comment_visibility: str | None = None
 
 
 class SearchTicketsByTextResult(BaseModel):
@@ -3807,6 +3808,10 @@ def search_tickets_by_text(
         str | None,
         Field(description="Optional comment author filter (name/email/id), e.g. Tom."),
     ] = None,
+    comment_visibility: Annotated[
+        str | None,
+        Field(description="Optional filter by comment visibility: 'public' or 'private'. When set, only tickets with at least one matching comment of that visibility are returned. Default is None (no filtering)."),
+    ] = None,
 ) -> SearchTicketsByTextResult:
     normalized_updated_since = updated_since
     if last_days is not None:
@@ -3825,6 +3830,7 @@ def search_tickets_by_text(
         include_solved=include_solved,
         exclude_internal=exclude_internal,
         comment_author=comment_author,
+        comment_visibility=comment_visibility,
     )
     return SearchTicketsByTextResult.model_validate(result)
 
