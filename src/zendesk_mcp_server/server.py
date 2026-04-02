@@ -583,6 +583,29 @@ class GetImportantTicketsTodayResult(BaseModel):
     tickets: list[TicketTroubleAssessment]
 
 
+class UnansweredTicketEntry(BaseModel):
+    ticket_id: int
+    ticket_url: str
+    ticket_link: str
+    subject: str | None = None
+    status: str | None = None
+    organization: str | None = None
+    assignee_id: int | None = None
+    hours_waiting: int
+    days_waiting: float
+    alert_level: str  # "warning" | "high" | "critical"
+    last_customer_comment_at: str | None = None
+    last_customer_comment_snippet: str | None = None
+    is_production: bool = False
+
+
+class ScanUnansweredTicketsResult(BaseModel):
+    scanned_count: int
+    unanswered_count: int
+    min_days_threshold: int
+    tickets: list[UnansweredTicketEntry]
+
+
 DEFAULT_INITIAL_RESPONSE_SLA_MINUTES = 60
 DEFAULT_HIGH_PRIORITY_STALE_HOURS = 8
 PENDING_TICKET_PRIORITY_DISCOUNT = 15
@@ -3573,6 +3596,177 @@ def get_important_tickets_today(
         in_trouble_count=in_trouble_count,
         ticket_list_markdown="" if ANTHROPIC_API_KEY else _build_ticket_trouble_markdown_list(assessments),
         tickets=assessments,
+    )
+
+
+def _find_latest_unanswered_customer_comment(
+    comments: list[dict[str, Any]],
+    requester_id: int | None,
+) -> tuple[int, str, str] | None:
+    """
+    Returns (hours_waiting, snippet, created_at_iso) for the latest customer public comment
+    that has no Appdome follow-up (public or internal) after it. Returns None if answered.
+    """
+    if requester_id is None:
+        return None
+
+    public_comments = sorted(
+        [c for c in comments if c.get("public")],
+        key=lambda c: _parse_iso_datetime(c.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc),
+    )
+    if not public_comments:
+        return None
+
+    # Find the most recent customer public comment.
+    latest_customer: dict[str, Any] | None = None
+    for c in reversed(public_comments):
+        if c.get("author_id") == requester_id:
+            latest_customer = c
+            break
+
+    if latest_customer is None:
+        return None
+
+    customer_time = _parse_iso_datetime(latest_customer.get("created_at"))
+    if customer_time is None:
+        return None
+
+    # Check whether any non-customer comment (public or internal) followed.
+    has_reply = any(
+        ((_parse_iso_datetime(c.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc)) > customer_time)
+        and _is_non_customer_follow_up_comment(c, requester_id)
+        for c in comments
+    )
+    if has_reply:
+        return None
+
+    now = datetime.now(timezone.utc)
+    hours_waiting = max(int((now - customer_time).total_seconds() // 3600), 1)
+    return hours_waiting, _comment_snippet(latest_customer), latest_customer.get("created_at") or ""
+
+
+def _unanswered_alert_level(hours_waiting: int) -> str:
+    """Map hours without a response to a named alert level."""
+    if hours_waiting >= 336:  # 14+ days
+        return "critical"
+    if hours_waiting >= 168:  # 7-14 days
+        return "high"
+    return "warning"  # 3-7 days
+
+
+@mcp.tool(
+    name="scan_unanswered_tickets",
+    description=(
+        "Scan all open tickets and surface those where a customer posted a public comment "
+        "and Appdome has not replied publicly or internally since. "
+        "Only tickets waiting at least min_days_threshold days are included. "
+        "The longer the silence, the higher the alert level: "
+        "warning = 3–7 days, high = 7–14 days, critical = 14+ days. "
+        "Results are sorted by longest wait first."
+    ),
+    structured_output=True,
+)
+def scan_unanswered_tickets(
+    min_days_threshold: Annotated[
+        int,
+        Field(description="Minimum number of days without an Appdome reply before a ticket is included (default 3)."),
+    ] = 3,
+    max_tickets: Annotated[
+        int,
+        Field(description="Maximum number of open tickets to inspect across all pages (max 500)."),
+    ] = 200,
+    per_page: Annotated[
+        int,
+        Field(description="Tickets to fetch per Zendesk API page (max 100)."),
+    ] = 100,
+    exclude_internal: Annotated[
+        bool,
+        Field(description="Exclude tickets tagged internal from scan results."),
+    ] = True,
+    agent: Annotated[
+        str | None,
+        Field(description="Optional assignee filter. Can be agent id, email, or name."),
+    ] = None,
+    organization: Annotated[
+        str | None,
+        Field(description="Optional organization name filter."),
+    ] = None,
+) -> ScanUnansweredTicketsResult:
+    bounded_per_page = min(per_page, 100)
+    bounded_max = min(max_tickets, 500)
+    min_hours = min_days_threshold * 24
+
+    candidate_ticket_ids: list[int] = []
+    seen: set[int] = set()
+    page = 1
+    while len(candidate_ticket_ids) < bounded_max:
+        result = zendesk_client.get_tickets(
+            page=page,
+            per_page=bounded_per_page,
+            sort_by="updated_at",
+            sort_order="asc",
+            agent=agent,
+            organization=organization,
+            exclude_internal=exclude_internal,
+        )
+        for ticket in result.get("tickets", []):
+            if len(candidate_ticket_ids) >= bounded_max:
+                break
+            ticket_id = ticket.get("id")
+            if ticket_id is None:
+                continue
+            normalized = int(ticket_id)
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            candidate_ticket_ids.append(normalized)
+        if not result.get("has_more"):
+            break
+        page += 1
+
+    unanswered: list[UnansweredTicketEntry] = []
+    scanned = 0
+    for ticket_id in candidate_ticket_ids:
+        full_ticket = _prepare_ticket_payload(ticket_id)
+        status = str(full_ticket.get("status", "")).lower()
+        if status in {"solved", "closed"}:
+            continue
+        scanned += 1
+        requester_id = full_ticket.get("requester_id")
+        comments = zendesk_client.get_ticket_comments(ticket_id)
+        result_tuple = _find_latest_unanswered_customer_comment(comments, requester_id)
+        if result_tuple is None:
+            continue
+        hours_waiting, snippet, comment_at = result_tuple
+        if hours_waiting < min_hours:
+            continue
+        production_impact = _build_production_impact_assessment(ticket=full_ticket, comments=comments)
+        url = _ticket_url(ticket_id) or ""
+        link = _ticket_link(ticket_id) or ""
+        unanswered.append(
+            UnansweredTicketEntry(
+                ticket_id=ticket_id,
+                ticket_url=url,
+                ticket_link=link,
+                subject=full_ticket.get("subject"),
+                status=full_ticket.get("status"),
+                organization=full_ticket.get("organization_name"),
+                assignee_id=full_ticket.get("assignee_id"),
+                hours_waiting=hours_waiting,
+                days_waiting=round(hours_waiting / 24, 1),
+                alert_level=_unanswered_alert_level(hours_waiting),
+                last_customer_comment_at=comment_at or None,
+                last_customer_comment_snippet=snippet or None,
+                is_production=production_impact.is_production_issue,
+            )
+        )
+
+    unanswered.sort(key=lambda e: e.hours_waiting, reverse=True)
+    return ScanUnansweredTicketsResult(
+        scanned_count=scanned,
+        unanswered_count=len(unanswered),
+        min_days_threshold=min_days_threshold,
+        tickets=unanswered,
     )
 
 
