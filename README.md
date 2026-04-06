@@ -370,8 +370,8 @@ Randomly sample solved tickets for a specific agent in a date window.
 
 - Input:
   - `agent` (required)
-  - `solved_after` (required, inclusive date)
-  - `solved_before` (required, exclusive date)
+  - `solved_after` (required, inclusive date — filters by when the ticket was solved/updated, not created)
+  - `solved_before` (required, exclusive date — filters by when the ticket was solved/updated, not created)
   - `count` (default `4`)
   - `exclude_api_created` (default `true` for `review_random_solved_tickets_for_agent`, `false` for `sample_solved_tickets_for_agent`)
   - `seed` (optional for repeatable sampling)
