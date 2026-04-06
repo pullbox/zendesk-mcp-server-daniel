@@ -3909,7 +3909,7 @@ def review_random_solved_tickets_for_agent(
     exclude_api_created: Annotated[
         bool,
         Field(description="Exclude tickets whose Zendesk via.channel is api."),
-    ] = False,
+    ] = True,
     seed: Annotated[int | None, Field(description="Optional random seed for repeatable sampling.")] = None,
     max_pool: Annotated[int, Field(description="Maximum number of matching tickets to retrieve before sampling.")] = 250,
 ) -> RandomTicketReviewResult:

@@ -373,7 +373,7 @@ Randomly sample solved tickets for a specific agent in a date window.
   - `solved_after` (required, inclusive date)
   - `solved_before` (required, exclusive date)
   - `count` (default `4`)
-  - `exclude_api_created` (default `false`)
+  - `exclude_api_created` (default `true` for `review_random_solved_tickets_for_agent`, `false` for `sample_solved_tickets_for_agent`)
   - `seed` (optional for repeatable sampling)
   - `max_pool` (default `250`)
 
