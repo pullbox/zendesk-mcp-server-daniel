@@ -105,7 +105,7 @@ def build_batch_ticket_review_input(
                 "production_issue": bool(
                     ticket_payload.get("production_impact", {}).get("is_production_issue")
                 ),
-                "rubric": rubric_template.format(ticket_id=ticket_id, ticket_link=ticket_link).strip(),
+                "rubric": rubric_template.format(ticket_id=ticket_id, ticket_link=ticket_link, attribution_guardrails=ATTRIBUTION_GUARDRAILS).strip(),
                 "ticket": _convert_timestamp_fields(review["ticket"]),
                 "first_comment_context": _convert_timestamp_fields(review.get("first_comment_context") or {}),
                 "recent_comment_context": _convert_timestamp_fields(review.get("recent_comment_context") or []),
