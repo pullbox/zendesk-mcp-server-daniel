@@ -39,7 +39,7 @@ ZENDESK_TICKET_LINK_BASE_URL = os.getenv(
     "ZENDESK_TICKET_LINK_BASE_URL",
     "https://appdomesupport.zendesk.com/agent/tickets",
 )
-EST_TIMEZONE = timezone(timedelta(hours=-5), name="EST")
+LOCAL_TIMEZONE = datetime.now().astimezone().tzinfo
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
 ATTRIBUTION_GUARDRAILS = """
@@ -248,22 +248,6 @@ Rules:
 - Prefer concise, evidence-based statements.
 """
 
-COMMENT_DRAFT_TEMPLATE = """
-You are a helpful Zendesk support agent. You need to draft a response to ticket {ticket_link}.
-
-Please fetch the ticket info, comments and knowledge base to draft a professional and helpful response that:
-1. Acknowledges the customer's concern
-2. Addresses the specific issues raised
-3. Provides clear next steps or ask for specific details need to proceed
-4. Maintains a friendly and professional tone
-5. Ask for confirmation before commenting on the ticket
-
-Apply these evidence and attribution guardrails:
-{attribution_guardrails}
-
-The response should be formatted well and ready to be posted as a comment.
-"""
-
 ticket_field_option_resolver = TicketFieldOptionResolver(zendesk_client)
 ticket_field_option_resolver.load()
 
@@ -304,7 +288,7 @@ def _hydrate_ticket_user_fields(ticket: dict[str, Any]) -> None:
 def _sort_comments_by_time(comments: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(
         comments,
-        key=lambda c: _parse_iso_datetime(c.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc),
+        key=_comment_time_key,
     )
 
 
@@ -353,12 +337,10 @@ def _format_minutes(minutes: int) -> str:
 def _format_display_datetime(value: str | None) -> str:
     if not value:
         return "N/A"
-    try:
-        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        dt = dt.astimezone(EST_TIMEZONE)
-        return dt.strftime("%B %-d, %Y at %H:%M EST")
-    except ValueError:
+    dt = _parse_iso_datetime(value)
+    if dt is None:
         return value
+    return dt.astimezone(LOCAL_TIMEZONE).strftime("%B %-d, %Y at %H:%M %Z")
 
 
 def _build_ticket_summary(ticket: dict[str, Any]) -> str:
@@ -1004,6 +986,18 @@ ENGINEERING_JIRA_UPDATE_STATUS_PATTERNS: tuple[re.Pattern[str], ...] = (
 )
 
 
+_MIN_UTC = datetime.min.replace(tzinfo=timezone.utc)
+
+
+def _comment_time_key(c: dict[str, Any]) -> datetime:
+    return _parse_iso_datetime(c.get("created_at")) or _MIN_UTC
+
+
+def _get_custom_fields(ticket: dict[str, Any]) -> dict[str, Any]:
+    cf = ticket.get("custom_fields")
+    return cf if isinstance(cf, dict) else {}
+
+
 def _parse_iso_datetime(value: str | None) -> datetime | None:
     if not value:
         return None
@@ -1081,13 +1075,13 @@ def _classify_engineering_jira_update(comment: dict[str, Any]) -> str | None:
 
 def _latest_engineering_jira_update_signal(comments: list[dict[str, Any]]) -> str | None:
     latest_signal: str | None = None
-    latest_time = datetime.min.replace(tzinfo=timezone.utc)
+    latest_time = _MIN_UTC
 
     for comment in comments:
         signal = _classify_engineering_jira_update(comment)
         if signal is None:
             continue
-        comment_time = _parse_iso_datetime(comment.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc)
+        comment_time = _parse_iso_datetime(comment.get("created_at")) or _MIN_UTC
         if comment_time >= latest_time:
             latest_time = comment_time
             latest_signal = signal
@@ -1104,7 +1098,7 @@ def _summarize_engineering_jira_updates(comments: list[dict[str, Any]]) -> list[
             continue
 
         created_at = comment.get("created_at") or "unknown time"
-        comment_time = _parse_iso_datetime(comment.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc)
+        comment_time = _parse_iso_datetime(comment.get("created_at")) or _MIN_UTC
         description = re.sub(r"\s+", " ", _extract_engineering_jira_update_description(_comment_text(comment))).strip()
         if not description:
             description = _comment_snippet(comment, limit=180)
@@ -1202,7 +1196,7 @@ def _is_sev1_ticket(ticket: dict[str, Any], is_escalated: bool) -> bool:
     if not is_escalated:
         return False
 
-    custom_fields = ticket.get("custom_fields") if isinstance(ticket.get("custom_fields"), dict) else {}
+    custom_fields = _get_custom_fields(ticket)
     priority_candidates = [
         ticket.get("priority"),
         custom_fields.get("Priority"),
@@ -1218,7 +1212,7 @@ def _build_production_priority_mismatch_flag(
     """Flag when a ticket appears to be a production issue but ENG Priority is set to something other than sev1."""
     if not production_impact.is_production_issue:
         return None
-    custom_fields = ticket.get("custom_fields") if isinstance(ticket.get("custom_fields"), dict) else {}
+    custom_fields = _get_custom_fields(ticket)
     eng_priority_raw = custom_fields.get("Eng Priority")
     normalized = _normalize_priority_value(eng_priority_raw)
     if not normalized:
@@ -1283,7 +1277,7 @@ def _build_customer_unhappy_flag(
 ) -> TicketTroubleFlag | None:
     for comment in sorted(
         comments,
-        key=lambda c: _parse_iso_datetime(c.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc),
+        key=_comment_time_key,
         reverse=True,
     ):
         text = _comment_text(comment)
@@ -1319,7 +1313,7 @@ def _build_customer_comment_response_flag(
 
     public_comments_sorted = sorted(
         [comment for comment in comments if comment.get("public")],
-        key=lambda c: _parse_iso_datetime(c.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc),
+        key=_comment_time_key,
     )
     if not public_comments_sorted:
         return None
@@ -1342,7 +1336,7 @@ def _build_customer_comment_response_flag(
 
         if _is_no_response_expected_comment(customer_comment):
             has_any_later_appdome_comment = any(
-                (_parse_iso_datetime(possible_reply.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc))
+                (_parse_iso_datetime(possible_reply.get("created_at")) or _MIN_UTC)
                 > customer_time
                 and _is_non_customer_follow_up_comment(possible_reply, requester_id)
                 for possible_reply in comments
@@ -1431,7 +1425,7 @@ def _build_customer_repeated_pressure_flag(
 
     for comment in sorted(
         comments,
-        key=lambda c: _parse_iso_datetime(c.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc),
+        key=_comment_time_key,
     ):
         if not bool(comment.get("public")) or comment.get("author_id") != requester_id:
             continue
@@ -1471,31 +1465,25 @@ def _build_customer_repeated_pressure_flag(
     )
 
 
-def _build_customer_urgency_flag(
+def _first_pattern_match(
     ticket: dict[str, Any],
     comments: list[dict[str, Any]],
     requester_id: int | None,
-) -> TicketTroubleFlag | None:
+    patterns: tuple[re.Pattern[str], ...],
+) -> tuple[str, str, str] | None:
+    """Return (source, match_text, created_at) for the first pattern hit in
+    subject/description then customer comments (newest first), or None."""
     subject = str(ticket.get("subject") or "")
     description = str(ticket.get("description") or "")
-
     for field_name, text in (("subject", subject), ("description", description)):
-        for pattern in CUSTOMER_URGENCY_PATTERNS:
+        for pattern in patterns:
             match = pattern.search(text)
-            if not match:
-                continue
-            return TicketTroubleFlag(
-                code="customer_urgency",
-                severity="high",
-                message=(
-                    "Customer language marks this ticket as urgent/high-priority; highlight in scan results. "
-                    f"Evidence: '{match.group(0)}' in ticket {field_name}."
-                ),
-            )
+            if match:
+                return field_name, match.group(0), ""
 
     for comment in sorted(
         comments,
-        key=lambda c: _parse_iso_datetime(c.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc),
+        key=_comment_time_key,
         reverse=True,
     ):
         if requester_id is not None and comment.get("author_id") != requester_id:
@@ -1503,21 +1491,34 @@ def _build_customer_urgency_flag(
         text = _comment_text(comment)
         if not text:
             continue
-        for pattern in CUSTOMER_URGENCY_PATTERNS:
+        for pattern in patterns:
             match = pattern.search(text)
-            if not match:
-                continue
-            created_at = comment.get("created_at") or "unknown time"
-            return TicketTroubleFlag(
-                code="customer_urgency",
-                severity="high",
-                message=(
-                    "Customer explicitly marked this issue as urgent/high-priority; highlight in scan results. "
-                    f"Evidence: '{match.group(0)}' in customer_public_comment at {created_at}."
-                ),
-            )
+            if match:
+                return "customer_public_comment", match.group(0), comment.get("created_at") or "unknown time"
 
     return None
+
+
+def _build_customer_urgency_flag(
+    ticket: dict[str, Any],
+    comments: list[dict[str, Any]],
+    requester_id: int | None,
+) -> TicketTroubleFlag | None:
+    hit = _first_pattern_match(ticket, comments, requester_id, CUSTOMER_URGENCY_PATTERNS)
+    if hit is None:
+        return None
+    source, match_text, created_at = hit
+    if source in ("subject", "description"):
+        message = (
+            "Customer language marks this ticket as urgent/high-priority; highlight in scan results. "
+            f"Evidence: '{match_text}' in ticket {source}."
+        )
+    else:
+        message = (
+            "Customer explicitly marked this issue as urgent/high-priority; highlight in scan results. "
+            f"Evidence: '{match_text}' in {source} at {created_at}."
+        )
+    return TicketTroubleFlag(code="customer_urgency", severity="high", message=message)
 
 
 def _build_ticket_report_request_flag(
@@ -1525,48 +1526,21 @@ def _build_ticket_report_request_flag(
     comments: list[dict[str, Any]],
     requester_id: int | None,
 ) -> TicketTroubleFlag | None:
-    subject = str(ticket.get("subject") or "")
-    description = str(ticket.get("description") or "")
-
-    for field_name, text in (("subject", subject), ("description", description)):
-        for pattern in TICKET_REPORT_REQUEST_PATTERNS:
-            match = pattern.search(text)
-            if not match:
-                continue
-            return TicketTroubleFlag(
-                code="ticket_report_request",
-                severity="medium",
-                message=(
-                    "Ticket includes an explicit Zendesk ticket-report request; treat this as an elevated-attention "
-                    f"signal. Evidence: '{match.group(0)}' in ticket {field_name}."
-                ),
-            )
-
-    for comment in sorted(
-        comments,
-        key=lambda c: _parse_iso_datetime(c.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc),
-        reverse=True,
-    ):
-        if requester_id is not None and comment.get("author_id") != requester_id:
-            continue
-        text = _comment_text(comment)
-        if not text:
-            continue
-        for pattern in TICKET_REPORT_REQUEST_PATTERNS:
-            match = pattern.search(text)
-            if not match:
-                continue
-            created_at = comment.get("created_at") or "unknown time"
-            return TicketTroubleFlag(
-                code="ticket_report_request",
-                severity="medium",
-                message=(
-                    "Customer requested a Zendesk ticket report; treat this as an elevated-attention signal. "
-                    f"Evidence: '{match.group(0)}' in customer_public_comment at {created_at}."
-                ),
-            )
-
-    return None
+    hit = _first_pattern_match(ticket, comments, requester_id, TICKET_REPORT_REQUEST_PATTERNS)
+    if hit is None:
+        return None
+    source, match_text, created_at = hit
+    if source in ("subject", "description"):
+        message = (
+            "Ticket includes an explicit Zendesk ticket-report request; treat this as an elevated-attention "
+            f"signal. Evidence: '{match_text}' in ticket {source}."
+        )
+    else:
+        message = (
+            "Customer requested a Zendesk ticket report; treat this as an elevated-attention signal. "
+            f"Evidence: '{match_text}' in {source} at {created_at}."
+        )
+    return TicketTroubleFlag(code="ticket_report_request", severity="medium", message=message)
 
 
 def _collect_environment_signal_matches(
@@ -1597,7 +1571,7 @@ def _build_production_impact_assessment(
     non_production_signals: list[str] = []
     has_issue_signal = False
     has_training_request_signal = False
-    custom_fields = ticket.get("custom_fields") if isinstance(ticket.get("custom_fields"), dict) else {}
+    custom_fields = _get_custom_fields(ticket)
 
     release_stage = custom_fields.get("Release Stage")
     support_class = custom_fields.get("Support Class")
@@ -1661,7 +1635,7 @@ def _build_tom_tovar_comment_metadata(comments: list[dict[str, Any]]) -> dict[st
             continue
     tom_comments_sorted = sorted(
         tom_comments,
-        key=lambda c: _parse_iso_datetime(c.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc),
+        key=_comment_time_key,
     )
     first_comment_at = tom_comments_sorted[0].get("created_at") if tom_comments_sorted else None
     latest_comment_at = None
@@ -1698,7 +1672,7 @@ def _build_tom_tovar_comment_metadata(comments: list[dict[str, Any]]) -> dict[st
 def _extract_recent_comment_notes(comments: list[dict[str, Any]], requester_id: int | None) -> list[str]:
     comments_sorted = sorted(
         comments,
-        key=lambda c: _parse_iso_datetime(c.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc),
+        key=_comment_time_key,
     )
     recent_comments = comments_sorted[-3:]
     notes: list[str] = []
@@ -1863,7 +1837,7 @@ def _build_meeting_summary_flag(
 ) -> TicketTroubleFlag | None:
     comments_sorted = sorted(
         comments,
-        key=lambda c: _parse_iso_datetime(c.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc),
+        key=_comment_time_key,
     )
     if not comments_sorted:
         return None
@@ -1888,8 +1862,8 @@ def _build_meeting_summary_flag(
             candidate
             for candidate in comments_sorted
             if (
-                (_parse_iso_datetime(candidate.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc))
-                > (comment_time or datetime.min.replace(tzinfo=timezone.utc))
+                (_parse_iso_datetime(candidate.get("created_at")) or _MIN_UTC)
+                > (comment_time or _MIN_UTC)
             )
         ]
         if not scheduled_at and not later_comments:
@@ -1923,6 +1897,20 @@ def _build_meeting_summary_flag(
     return None
 
 
+def _last_public_agent_comment_time(
+    comments_sorted: list[dict[str, Any]],
+    requester_id: int | None,
+) -> datetime | None:
+    """Return the timestamp of the most recent public agent comment, or None."""
+    for comment in reversed(comments_sorted):
+        if not comment.get("public"):
+            continue
+        if requester_id is not None and comment.get("author_id") == requester_id:
+            continue
+        return _parse_iso_datetime(comment.get("created_at"))
+    return None
+
+
 def _build_proactive_update_gap_flag(
     comments: list[dict[str, Any]],
     requester_id: int | None,
@@ -1943,19 +1931,10 @@ def _build_proactive_update_gap_flag(
 
     comments_sorted = sorted(
         comments,
-        key=lambda c: _parse_iso_datetime(c.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc),
+        key=_comment_time_key,
     )
 
-    # Find the most recent public agent comment time.
-    last_public_agent_time: datetime | None = None
-    for comment in reversed(comments_sorted):
-        if not comment.get("public"):
-            continue
-        if requester_id is not None and comment.get("author_id") == requester_id:
-            continue
-        last_public_agent_time = _parse_iso_datetime(comment.get("created_at"))
-        break
-
+    last_public_agent_time = _last_public_agent_comment_time(comments_sorted, requester_id)
     if last_public_agent_time is None:
         return None
 
@@ -1963,7 +1942,7 @@ def _build_proactive_update_gap_flag(
     has_internal_activity = any(
         not comment.get("public")
         and (
-            _parse_iso_datetime(comment.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc)
+            _parse_iso_datetime(comment.get("created_at")) or _MIN_UTC
         ) > last_public_agent_time
         for comment in comments_sorted
     )
@@ -2014,19 +1993,10 @@ def _build_proactive_update_overdue_flag(
 
     comments_sorted = sorted(
         comments,
-        key=lambda c: _parse_iso_datetime(c.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc),
+        key=_comment_time_key,
     )
 
-    # Find the most recent public agent comment.
-    last_public_agent_time: datetime | None = None
-    for comment in reversed(comments_sorted):
-        if not comment.get("public"):
-            continue
-        if requester_id is not None and comment.get("author_id") == requester_id:
-            continue
-        last_public_agent_time = _parse_iso_datetime(comment.get("created_at"))
-        break
-
+    last_public_agent_time = _last_public_agent_comment_time(comments_sorted, requester_id)
     if last_public_agent_time is None:
         return None
 
@@ -2042,7 +2012,7 @@ def _build_proactive_update_overdue_flag(
         not comment.get("public")
         and (requester_id is None or comment.get("author_id") != requester_id)
         and (
-            _parse_iso_datetime(comment.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc)
+            _parse_iso_datetime(comment.get("created_at")) or _MIN_UTC
         ) > last_public_agent_time
         for comment in comments_sorted
     )
@@ -2084,7 +2054,7 @@ def _build_sev1_customer_data_follow_up_flag(
 
     public_comments_sorted = sorted(
         [comment for comment in comments if comment.get("public")],
-        key=lambda c: _parse_iso_datetime(c.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc),
+        key=_comment_time_key,
     )
     if not public_comments_sorted:
         return None
@@ -2164,7 +2134,7 @@ def _resolve_merged_ticket_reference(
 
     last_comment = max(
         comments,
-        key=lambda c: _parse_iso_datetime(c.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc),
+        key=_comment_time_key,
     )
     referenced_ticket_id = _extract_merged_ticket_id_from_comment(last_comment)
     if referenced_ticket_id is None or referenced_ticket_id == ticket_id:
@@ -2334,7 +2304,7 @@ def _customer_comment_indicates_resolution_acknowledgement(comment: dict[str, An
     text = re.sub(r"\s+", " ", _comment_text(comment)).strip()
     if not text:
         return False
-    text = re.sub(r"\s+", " ", text).strip().lower()
+    text = text.lower()
 
     unresolved_patterns = (
         re.compile(r"\bbut\b.{0,40}\b(?:not|still|unable|can't|cannot|didn't|doesn't|issue|problem|error)\b", re.IGNORECASE),
@@ -2379,7 +2349,7 @@ def _build_customer_resolution_acknowledged_open_flag(
 
     latest_customer_comment = max(
         customer_public_comments,
-        key=lambda c: _parse_iso_datetime(c.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc),
+        key=_comment_time_key,
     )
     if not _customer_comment_indicates_resolution_acknowledgement(latest_customer_comment):
         return None
@@ -2402,7 +2372,7 @@ def _has_internal_first_comment(comments: list[dict[str, Any]]) -> bool:
 
     first_comment = min(
         comments,
-        key=lambda comment: _parse_iso_datetime(comment.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc),
+        key=_comment_time_key,
     )
     return not bool(first_comment.get("public"))
 
@@ -2413,7 +2383,7 @@ def _is_escalated_ticket(ticket: dict[str, Any]) -> bool:
     if escalation_display or escalation_tag:
         return True
 
-    custom_fields = ticket.get("custom_fields") if isinstance(ticket.get("custom_fields"), dict) else {}
+    custom_fields = _get_custom_fields(ticket)
     escalation_value = custom_fields.get("Escalation Status") or custom_fields.get("Escalation")
     if escalation_value is None:
         return False
@@ -2440,22 +2410,26 @@ def _build_ticket_trouble_assessment(
     tags = set(ticket.get("tags") or [])
     created_at = _parse_iso_datetime(ticket.get("created_at"))
     updated_at = _parse_iso_datetime(ticket.get("updated_at"))
-    custom_fields = ticket.get("custom_fields") if isinstance(ticket.get("custom_fields"), dict) else {}
+    custom_fields = _get_custom_fields(ticket)
     is_escalated = _is_escalated_ticket(ticket)
     status_with = str(custom_fields.get("Status With") or "").strip().lower()
     is_feature_request = _is_feature_request_ticket(subject)
-    if is_feature_request:
-        production_impact = ProductionImpactAssessment()
-    else:
-        production_impact = _build_production_impact_assessment(ticket=ticket, comments=comments)
+    production_impact = (
+        ProductionImpactAssessment()
+        if is_feature_request
+        else _build_production_impact_assessment(ticket=ticket, comments=comments)
+    )
+
+    # Shared computations used by both the feature-request early-return and the normal path.
+    tom_tovar_comment_metadata = _build_tom_tovar_comment_metadata(comments)
+    comments_sorted = _sort_comments_by_time(comments)
+    first_comment_context = _build_first_comment_context(ticket=ticket, comments=comments_sorted, requester_id=requester_id)
+    comment_context = _build_comment_context(comments=comments_sorted, requester_id=requester_id, limit=10)
+    recent_comment_notes = _extract_recent_comment_notes(comments=comments, requester_id=requester_id)
+    engineering_jira_update_summaries = _summarize_engineering_jira_updates(comments)
+    public_solution_follow_up = _latest_public_agent_follow_up_after_resolution(comments=comments, requester_id=requester_id)
 
     if is_feature_request:
-        tom_tovar_comment_metadata = _build_tom_tovar_comment_metadata(comments)
-        comments_sorted = _sort_comments_by_time(comments)
-        first_comment_context = _build_first_comment_context(ticket=ticket, comments=comments_sorted, requester_id=requester_id)
-        comment_context = _build_comment_context(comments=comments_sorted, requester_id=requester_id, limit=10)
-        recent_comment_notes = _extract_recent_comment_notes(comments=comments, requester_id=requester_id)
-        engineering_jira_update_summaries = _summarize_engineering_jira_updates(comments)
         return _populate_ticket_report_fields(TicketTroubleAssessment(
             ticket_id=ticket_id,
             ticket_url=_ticket_url(ticket_id) or "",
@@ -2485,15 +2459,10 @@ def _build_ticket_trouble_assessment(
             tom_tovar_latest_comment_at=tom_tovar_comment_metadata["tom_tovar_latest_comment_at"],
             tom_tovar_comment_summary=tom_tovar_comment_metadata["tom_tovar_comment_summary"],
             ticket_summary_paragraph="No major trouble signals detected.",
-            public_solution_follow_up=_latest_public_agent_follow_up_after_resolution(
-                comments=comments,
-                requester_id=requester_id,
-            ),
+            public_solution_follow_up=public_solution_follow_up,
         ))
 
     public_comments = [c for c in comments if c.get("public")]
-    comments_sorted = _sort_comments_by_time(comments)
-    first_comment_context = _build_first_comment_context(ticket=ticket, comments=comments_sorted, requester_id=requester_id)
     crash_tag_reviewed = "crash_reviewed" in tags
     is_unreviewed_crash_ticket = "crash_detected" in tags and not crash_tag_reviewed
     crash_attachment_summary = _build_crash_attachment_summary(
@@ -2503,7 +2472,7 @@ def _build_ticket_trouble_assessment(
     )
     public_comments_sorted = sorted(
         public_comments,
-        key=lambda c: _parse_iso_datetime(c.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc),
+        key=_comment_time_key,
     )
     has_internal_first_comment = _has_internal_first_comment(comments)
 
@@ -2622,7 +2591,6 @@ def _build_ticket_trouble_assessment(
     customer_public_comments = [
         c for c in public_comments_sorted if requester_id is not None and c.get("author_id") == requester_id
     ]
-    comment_context = _build_comment_context(comments=comments_sorted, requester_id=requester_id, limit=10)
     customer_response_flag = _build_customer_comment_response_flag(
         comments=comments,
         requester_id=requester_id,
@@ -2768,9 +2736,7 @@ def _build_ticket_trouble_assessment(
     if proactive_update_overdue_flag is not None:
         flags.append(proactive_update_overdue_flag)
 
-    recent_comment_notes = _extract_recent_comment_notes(comments=comments, requester_id=requester_id)
     engineering_jira_update_signal = _latest_engineering_jira_update_signal(comments)
-    engineering_jira_update_summaries = _summarize_engineering_jira_updates(comments)
 
     sorted_flags = sorted(
         flags,
@@ -2792,7 +2758,6 @@ def _build_ticket_trouble_assessment(
         base_risk_score=base_risk_score,
         engineering_jira_update_signal=engineering_jira_update_signal,
     )
-    tom_tovar_comment_metadata = _build_tom_tovar_comment_metadata(comments)
 
     assessment = TicketTroubleAssessment(
         ticket_id=ticket_id,
@@ -2830,10 +2795,7 @@ def _build_ticket_trouble_assessment(
         tom_tovar_comment_count=tom_tovar_comment_metadata["tom_tovar_comment_count"],
         tom_tovar_latest_comment_at=tom_tovar_comment_metadata["tom_tovar_latest_comment_at"],
         tom_tovar_comment_summary=tom_tovar_comment_metadata["tom_tovar_comment_summary"],
-        public_solution_follow_up=_latest_public_agent_follow_up_after_resolution(
-            comments=comments,
-            requester_id=requester_id,
-        ),
+        public_solution_follow_up=public_solution_follow_up,
     )
     return _populate_ticket_report_fields(assessment)
 
@@ -3227,11 +3189,6 @@ def analyze_ticket_prompt(
 
 
 @mcp.prompt(
-    name="draft-ticket-response",
-    description="Draft a professional response to a Zendesk ticket",
-)
-
-@mcp.prompt(
     name="ticket-title-review-policy",
     description="Define the policy for reviewing Zendesk ticket title structure",
 )
@@ -3250,16 +3207,6 @@ def review_ticket_title_prompt(
         + "\n\n"
         + REVIEW_SINGLE_TICKET_TEMPLATE.format(ticket_id=ticket_id, ticket_link=_ticket_link(ticket_id)).strip()
     )
-
-
-def draft_ticket_response_prompt(
-    ticket_id: Annotated[int, Field(description="The ID of the ticket to respond to")],
-) -> str:
-    return COMMENT_DRAFT_TEMPLATE.format(
-        ticket_id=ticket_id,
-        ticket_link=_ticket_link(ticket_id),
-        attribution_guardrails=ATTRIBUTION_GUARDRAILS,
-    ).strip()
 
 
 @mcp.tool(name="get_ticket", description="Retrieve a Zendesk ticket by its ID")
@@ -3624,7 +3571,7 @@ def scan_tickets_in_trouble(
 
     _enrich_assessments_with_ai(assessments)
     assessments = _sort_ticket_assessments_by_importance(assessments)
-    in_trouble_count = len([ticket for ticket in assessments if ticket.in_trouble])
+    in_trouble_count = sum(1 for t in assessments if t.in_trouble)
     return ScanTicketsInTroubleResult(
         created_last_hours=created_last_hours,
         scanned_count=len(assessments),
@@ -3729,7 +3676,7 @@ def scan_crash_tickets_in_trouble(
 
     _enrich_assessments_with_ai(assessments)
     assessments = _sort_ticket_assessments_by_importance(assessments)
-    in_trouble_count = len([ticket for ticket in assessments if ticket.in_trouble])
+    in_trouble_count = sum(1 for t in assessments if t.in_trouble)
     return ScanCrashTicketsInTroubleResult(
         tag=tag,
         scanned_count=len(assessments),
@@ -3839,7 +3786,7 @@ def get_important_tickets_today(
 
     assessments = _sort_ticket_assessments_by_importance(assessments)
     _enrich_assessments_with_ai(assessments)
-    in_trouble_count = len([ticket for ticket in assessments if ticket.in_trouble])
+    in_trouble_count = sum(1 for t in assessments if t.in_trouble)
     return GetImportantTicketsTodayResult(
         filters=ImportantTodayFilters(
             agent=agent,
@@ -3868,7 +3815,7 @@ def _find_latest_unanswered_customer_comment(
 
     public_comments = sorted(
         [c for c in comments if c.get("public")],
-        key=lambda c: _parse_iso_datetime(c.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc),
+        key=_comment_time_key,
     )
     if not public_comments:
         return None
@@ -3889,7 +3836,7 @@ def _find_latest_unanswered_customer_comment(
 
     # Check whether any non-customer comment (public or internal) followed.
     has_reply = any(
-        ((_parse_iso_datetime(c.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc)) > customer_time)
+        (_comment_time_key(c) > customer_time)
         and _is_non_customer_follow_up_comment(c, requester_id)
         for c in comments
     )
