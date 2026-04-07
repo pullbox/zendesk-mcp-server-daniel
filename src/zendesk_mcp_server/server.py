@@ -138,23 +138,77 @@ Required output:
    - Solution delivered to customer:
    - Customer acknowledgement:
    Use exact timestamps when available. Otherwise write "Not found".
-4. Attachment Evidence
+4. Proactive Update Cadence
+   Evaluate whether the customer was kept informed during active work periods,
+   independent of whether they were waiting or silent.
+
+   Evidence to gather:
+   - Timestamp of the last public agent comment directed at the customer
+   - Timestamp of any internal notes or internal activity posted after that last public comment
+   - Current ticket status and priority at each gap point
+   - Ticket age and total elapsed time in open/on-hold status
+
+   Cadence thresholds:
+   - urgent / high priority: public customer update required at least every 24 hours while the ticket is open and being worked
+   - normal / low priority: public customer update required at least every 48 hours while the ticket is open and being worked
+   - on-hold tickets: a public comment explaining why the ticket is on hold and what the expected timeline is must exist at the point of status change; the same cadence thresholds apply from that point forward
+
+   What counts as a valid update:
+   A valid proactive update must do at least one of the following:
+   - Report progress made since the last communication (e.g. "we have identified the cause and are building a fix")
+   - Set or revise a concrete ETA (e.g. "we expect to have an update by [date]")
+   - Explain a blocker and name the next action (e.g. "waiting on a log from Eng, will follow up once received — expected [date]")
+
+   What does NOT count:
+   - An internal note, even a detailed one — internal notes are not customer communication
+   - A status change without an accompanying public comment
+   - An automated Zendesk system message
+   - A comment that only asks the customer a question with no status update attached (e.g. "can you send the logs?" with no progress statement is not a proactive update)
+
+   Compliance scoring:
+   Score 0 — hard fail, any of:
+   - Internal notes exist showing active work, AND no public update was posted to the customer for more than 2x the cadence threshold (48h urgent/high, 96h normal/low)
+   - Ticket was on-hold with no public explanation of why or what to expect
+   - A specific follow-up date was stated in a prior comment and that date passed with no public comment posted
+
+   Score 1 — partial:
+   - One cadence gap exists that exceeded the threshold but was within 2x (e.g. 30h gap on an urgent ticket)
+   - Updates were posted but consistently failed the "what counts" criteria (vague check-ins with no progress, ETA, or blocker explanation)
+
+   Score 2 — compliant:
+   - No cadence gap exceeded the threshold for the ticket's priority level
+   - Every update period where internal work was recorded also has a corresponding public customer-facing comment that meets the criteria above
+
+   Required output:
+   Report as: Proactive Update Cadence: [COMPLIANT / PARTIAL / FAIL]
+
+   List each gap found:
+   - Gap [N]: last public agent comment [timestamp], next internal activity [timestamp], gap duration [Xh], threshold for this priority [Yh], threshold breached: [yes/no]
+   - If a committed date was missed: Committed update by [date], next public comment [timestamp or "not found"] — [MET / MISSED]
+
+   If no internal activity exists after the last public comment, report:
+   No internal activity gap detected — cadence check not applicable.
+
+   If ticket is pending on customer (Status With = Customer), report:
+   Ticket pending on customer — proactive update cadence paused.
+
+5. Attachment Evidence
    Report each item on its own line:
    - Crash-related attachments available:
    - Stacktrace attachments:
    - Replication path video:
    - Other crash-related attachments:
    Use exact attachment filenames when available. Otherwise write "Not found".
-5. CEO Comment Check
+6. CEO Comment Check
    Report each item on its own line:
    - CEO commented:
    - First CEO comment:
    - Latest CEO comment:
    - CEO comment summary:
    Use ticket metadata fields (tom_tovar_*) and comments as evidence.
-6. Process Findings
+7. Process Findings
    List concrete ticket-level observations about documented process completeness or gaps based on evidence from the ticket and comments.
-7. Overall QA Summary
+8. Overall QA Summary
    Give a concise summary of the ticket record quality.
    Focus on documented strengths, missing evidence, and follow-up items.
 
@@ -641,9 +695,10 @@ TROUBLE_FLAG_WEIGHTS: dict[str, int] = {
     "customer_acknowledged_resolution_ticket_still_open": 22,
     "sev1_customer_data_follow_up_overdue": 38,
     "solved_without_customer_confirmation": 10,
-    "proactive_update_gap": 28,
-    "high_priority_no_recent_updates": 25,
-    "support_owned_no_recent_updates": 25,
+    "proactive_update_gap": 45,
+    "proactive_update_overdue": 45,
+    "high_priority_no_recent_updates": 36,
+    "support_owned_no_recent_updates": 36,
     "late_initial_response": 20,
     "late_stacktrace_request": 44,
     "title_incorrect": 45,
@@ -657,6 +712,8 @@ PRODUCTION_CUSTOMER_FOLLOW_UP_SLA_HOURS = 2
 SEV1_CUSTOMER_DATA_FOLLOW_UP_SLA_HOURS = 1
 PROACTIVE_UPDATE_GAP_HOURS = 24
 PROACTIVE_UPDATE_GAP_ESCALATED_PRODUCTION_HOURS = 2
+PROACTIVE_UPDATE_OVERDUE_URGENT_HIGH_HOURS = 24
+PROACTIVE_UPDATE_OVERDUE_NORMAL_LOW_HOURS = 48
 NO_RESPONSE_EXPECTED_OPEN_STALE_DAYS = 5
 OPEN_TICKET_STATUSES = {"new", "open", "pending", "hold", "on-hold"}
 CRASH_SIGNAL_TERMS = [
@@ -1932,6 +1989,86 @@ def _build_proactive_update_gap_flag(
     )
 
 
+def _build_proactive_update_overdue_flag(
+    comments: list[dict[str, Any]],
+    requester_id: int | None,
+    status: str | None,
+    status_with: str | None,
+    priority: str | None,
+) -> TicketTroubleFlag | None:
+    """Flag when an agent has posted internal notes but no public customer update has been sent within the priority-based cadence threshold."""
+    status_lower = str(status or "").strip().lower()
+    if status_lower not in {"new", "open", "on-hold", "hold"}:
+        return None
+
+    # Exclude when the ticket is pending on customer.
+    if str(status_with or "").strip().lower() == "customer":
+        return None
+
+    priority_lower = str(priority or "").strip().lower()
+    threshold_hours = (
+        PROACTIVE_UPDATE_OVERDUE_URGENT_HIGH_HOURS
+        if priority_lower in {"urgent", "high"}
+        else PROACTIVE_UPDATE_OVERDUE_NORMAL_LOW_HOURS
+    )
+
+    comments_sorted = sorted(
+        comments,
+        key=lambda c: _parse_iso_datetime(c.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc),
+    )
+
+    # Find the most recent public agent comment.
+    last_public_agent_time: datetime | None = None
+    for comment in reversed(comments_sorted):
+        if not comment.get("public"):
+            continue
+        if requester_id is not None and comment.get("author_id") == requester_id:
+            continue
+        last_public_agent_time = _parse_iso_datetime(comment.get("created_at"))
+        break
+
+    if last_public_agent_time is None:
+        return None
+
+    # Exclude if the most recent comment of any kind is from the customer —
+    # that scenario is already covered by customer_comment_no_response.
+    if comments_sorted:
+        latest = comments_sorted[-1]
+        if requester_id is not None and latest.get("author_id") == requester_id:
+            return None
+
+    # Require at least one internal agent note after the last public agent comment.
+    has_internal_agent_activity = any(
+        not comment.get("public")
+        and (requester_id is None or comment.get("author_id") != requester_id)
+        and (
+            _parse_iso_datetime(comment.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc)
+        ) > last_public_agent_time
+        for comment in comments_sorted
+    )
+    if not has_internal_agent_activity:
+        return None
+
+    hours_since_public = int(
+        (datetime.now(timezone.utc) - last_public_agent_time).total_seconds() // 3600
+    )
+    if hours_since_public < threshold_hours:
+        return None
+
+    priority_label = priority_lower if priority_lower in {"urgent", "high", "normal", "low"} else "normal"
+    severity = "high" if priority_lower in {"urgent", "high"} else "medium"
+    return TicketTroubleFlag(
+        code="proactive_update_overdue",
+        severity=severity,
+        message=(
+            f"No public customer update in {hours_since_public}h "
+            f"(threshold {threshold_hours}h for {priority_label} priority). "
+            "Internal agent activity exists after the last public comment. "
+            "Send a proactive status update to the customer."
+        ),
+    )
+
+
 def _build_sev1_customer_data_follow_up_flag(
     ticket: dict[str, Any],
     comments: list[dict[str, Any]],
@@ -2621,6 +2758,16 @@ def _build_ticket_trouble_assessment(
     if proactive_update_gap_flag is not None:
         flags.append(proactive_update_gap_flag)
 
+    proactive_update_overdue_flag = _build_proactive_update_overdue_flag(
+        comments=comments,
+        requester_id=requester_id,
+        status=status,
+        status_with=status_with,
+        priority=priority,
+    )
+    if proactive_update_overdue_flag is not None:
+        flags.append(proactive_update_overdue_flag)
+
     recent_comment_notes = _extract_recent_comment_notes(comments=comments, requester_id=requester_id)
     engineering_jira_update_signal = _latest_engineering_jira_update_signal(comments)
     engineering_jira_update_summaries = _summarize_engineering_jira_updates(comments)
@@ -2775,6 +2922,7 @@ def _flag_label(flag: TicketTroubleFlag) -> str:
         "sev1_customer_data_follow_up_overdue": "SEV1 follow-up overdue",
         "solved_without_customer_confirmation": "Closed without customer confirmation",
         "proactive_update_gap": "No proactive customer update despite internal activity",
+        "proactive_update_overdue": "Proactive update overdue — cadence threshold exceeded",
         "high_priority_no_recent_updates": "High-priority stale",
         "support_owned_no_recent_updates": "Support-owned stale",
         "late_initial_response": "Late initial response",
@@ -2837,6 +2985,7 @@ _FLAG_VERBAL_TEXT: dict[str, str] = {
     "customer_acknowledged_resolution_ticket_still_open": "Ready to close but still open",
     "solved_without_customer_confirmation": "Closed without customer confirmation",
     "proactive_update_gap": "Agent working internally — customer not updated",
+    "proactive_update_overdue": "Proactive update overdue — cadence threshold exceeded",
     "ticket_report_request": "Customer requested ticket report",
     "late_stacktrace_request": "Late stacktrace request",
     "crash_process_gap": "Crash process gap — no stacktrace collected",
