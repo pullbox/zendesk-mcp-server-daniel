@@ -318,6 +318,7 @@ Scan non-solved tickets created in the last N hours and flag likely QA/process i
   - `crash_tag_missing_unreviewed_attachment_evidence`: crash-related attachments exist but crash tags and the `crash_reviewed` override tag are both missing.
   - `crash_process_gap`: crash/ANR ticket has neither stacktrace evidence nor an explicit request for crash logs.
   - `late_stacktrace_request`: crash/ANR ticket requested stacktrace evidence more than 60 minutes after ticket creation.
+  - `proactive_update_gap`: agent has written internal notes after the last public agent comment, but the customer has received no public update within the threshold — **2 hours** for escalated production tickets (severity `urgent`), **24 hours** for all others (severity `medium`). Catches the case where work is actively happening internally but the customer is being left in the dark.
 
 ### scan_crash_tickets_in_trouble
 

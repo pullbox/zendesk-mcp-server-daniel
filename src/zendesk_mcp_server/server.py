@@ -641,6 +641,7 @@ TROUBLE_FLAG_WEIGHTS: dict[str, int] = {
     "customer_acknowledged_resolution_ticket_still_open": 22,
     "sev1_customer_data_follow_up_overdue": 38,
     "solved_without_customer_confirmation": 10,
+    "proactive_update_gap": 28,
     "high_priority_no_recent_updates": 25,
     "support_owned_no_recent_updates": 25,
     "late_initial_response": 20,
@@ -649,11 +650,13 @@ TROUBLE_FLAG_WEIGHTS: dict[str, int] = {
     "production_user_impact": 35,
     "production_priority_mismatch": 55,
 }
-SEVERITY_FALLBACK_WEIGHTS = {"high": 30, "medium": 15, "low": 5}
-SEVERITY_RANK = {"high": 3, "medium": 2, "low": 1}
+SEVERITY_FALLBACK_WEIGHTS = {"urgent": 50, "high": 30, "medium": 15, "low": 5}
+SEVERITY_RANK = {"urgent": 4, "high": 3, "medium": 2, "low": 1}
 CUSTOMER_FOLLOW_UP_SLA_HOURS = 4
 PRODUCTION_CUSTOMER_FOLLOW_UP_SLA_HOURS = 2
 SEV1_CUSTOMER_DATA_FOLLOW_UP_SLA_HOURS = 1
+PROACTIVE_UPDATE_GAP_HOURS = 24
+PROACTIVE_UPDATE_GAP_ESCALATED_PRODUCTION_HOURS = 2
 NO_RESPONSE_EXPECTED_OPEN_STALE_DAYS = 5
 OPEN_TICKET_STATUSES = {"new", "open", "pending", "hold", "on-hold"}
 CRASH_SIGNAL_TERMS = [
@@ -1863,6 +1866,72 @@ def _build_meeting_summary_flag(
     return None
 
 
+def _build_proactive_update_gap_flag(
+    comments: list[dict[str, Any]],
+    requester_id: int | None,
+    status: str | None,
+    is_escalated: bool = False,
+    production_impact: ProductionImpactAssessment | None = None,
+) -> TicketTroubleFlag | None:
+    """Flag when an agent has posted internal notes but the customer has received no public update for too long."""
+    if str(status or "").strip().lower() not in OPEN_TICKET_STATUSES:
+        return None
+
+    is_escalated_production = is_escalated and (production_impact is not None and production_impact.is_production_issue)
+    threshold_hours = (
+        PROACTIVE_UPDATE_GAP_ESCALATED_PRODUCTION_HOURS
+        if is_escalated_production
+        else PROACTIVE_UPDATE_GAP_HOURS
+    )
+
+    comments_sorted = sorted(
+        comments,
+        key=lambda c: _parse_iso_datetime(c.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc),
+    )
+
+    # Find the most recent public agent comment time.
+    last_public_agent_time: datetime | None = None
+    for comment in reversed(comments_sorted):
+        if not comment.get("public"):
+            continue
+        if requester_id is not None and comment.get("author_id") == requester_id:
+            continue
+        last_public_agent_time = _parse_iso_datetime(comment.get("created_at"))
+        break
+
+    if last_public_agent_time is None:
+        return None
+
+    # Check whether any internal note exists after the last public agent comment.
+    has_internal_activity = any(
+        not comment.get("public")
+        and (
+            _parse_iso_datetime(comment.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc)
+        ) > last_public_agent_time
+        for comment in comments_sorted
+    )
+    if not has_internal_activity:
+        return None
+
+    hours_since_public = int(
+        (datetime.now(timezone.utc) - last_public_agent_time).total_seconds() // 3600
+    )
+    if hours_since_public < threshold_hours:
+        return None
+
+    severity = "urgent" if is_escalated_production else "medium"
+    context = "escalated production ticket" if is_escalated_production else "ticket"
+    return TicketTroubleFlag(
+        code="proactive_update_gap",
+        severity=severity,
+        message=(
+            f"Agent has written internal notes but the customer has received no public update in {hours_since_public}h "
+            f"(threshold {threshold_hours}h for this {context}). "
+            "Send a proactive status update to the customer."
+        ),
+    )
+
+
 def _build_sev1_customer_data_follow_up_flag(
     ticket: dict[str, Any],
     comments: list[dict[str, Any]],
@@ -2542,6 +2611,16 @@ def _build_ticket_trouble_assessment(
     if sev1_customer_data_follow_up_flag is not None:
         flags.append(sev1_customer_data_follow_up_flag)
 
+    proactive_update_gap_flag = _build_proactive_update_gap_flag(
+        comments=comments,
+        requester_id=requester_id,
+        status=status,
+        is_escalated=is_escalated,
+        production_impact=production_impact,
+    )
+    if proactive_update_gap_flag is not None:
+        flags.append(proactive_update_gap_flag)
+
     recent_comment_notes = _extract_recent_comment_notes(comments=comments, requester_id=requester_id)
     engineering_jira_update_signal = _latest_engineering_jira_update_signal(comments)
     engineering_jira_update_summaries = _summarize_engineering_jira_updates(comments)
@@ -2695,6 +2774,7 @@ def _flag_label(flag: TicketTroubleFlag) -> str:
         "customer_acknowledged_resolution_ticket_still_open": "Ready to close but still open",
         "sev1_customer_data_follow_up_overdue": "SEV1 follow-up overdue",
         "solved_without_customer_confirmation": "Closed without customer confirmation",
+        "proactive_update_gap": "No proactive customer update despite internal activity",
         "high_priority_no_recent_updates": "High-priority stale",
         "support_owned_no_recent_updates": "Support-owned stale",
         "late_initial_response": "Late initial response",
@@ -2756,6 +2836,7 @@ _FLAG_VERBAL_TEXT: dict[str, str] = {
     "meeting_summary_missing": "Meeting summary flag raised",
     "customer_acknowledged_resolution_ticket_still_open": "Ready to close but still open",
     "solved_without_customer_confirmation": "Closed without customer confirmation",
+    "proactive_update_gap": "Agent working internally — customer not updated",
     "ticket_report_request": "Customer requested ticket report",
     "late_stacktrace_request": "Late stacktrace request",
     "crash_process_gap": "Crash process gap — no stacktrace collected",
