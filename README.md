@@ -230,7 +230,7 @@ Find tickets that matter today based on current attention needs, not just creati
   - fetches tickets updated in the last `recent_activity_hours`
   - fetches stale tickets older than `stale_hours`
   - de-duplicates the combined candidate set
-  - fetches full ticket details and comments for all candidates in parallel (up to 10 concurrent requests); individual ticket failures are logged and skipped rather than aborting the scan
+  - fetches full ticket details, comments, and ticket metrics for all candidates in parallel (up to 10 concurrent requests); individual ticket failures are logged and skipped rather than aborting the scan
   - runs the ticket trouble assessment on each candidate and returns a ranked structured list
 
 - Input:
@@ -329,8 +329,8 @@ Scan non-solved tickets created in the last N hours and flag likely QA/process i
   - `production_user_impact`: ticket text/comments indicate a live production issue affecting real users/customers.
   - `production_priority_mismatch`: ticket signals a production issue but `Eng Priority` is populated and does not reflect Sev1 — flags cases where engineering severity understates the customer impact.
   - `status_fields_incomplete`: one or more of `Status With`, `Support Stage`, or `Release Stage` is missing.
-  - `missing_initial_response`: no public agent reply after the configured first-response SLA, unless the first comment was internal.
-  - `late_initial_response`: first public agent reply exceeded the configured first-response SLA.
+  - `missing_initial_response`: no public agent reply after the configured first-response SLA, unless the first comment was internal. When the Zendesk Ticket Metrics API is available, the elapsed time is read from `reply_time_in_minutes.calendar` (authoritative calendar-time from Zendesk); otherwise the server falls back to computing it from comment timestamps.
+  - `late_initial_response`: first public agent reply exceeded the configured first-response SLA. Uses the same Ticket Metrics API value as `missing_initial_response` when available.
   - `meeting_summary_missing`: a meeting/call was requested or scheduled, but no later summary notes were found after the meeting should have occurred.
   - `customer_comment_no_response`: a customer public comment did not receive an Appdome follow-up within the configured SLA.
   - `customer_acknowledged_resolution_ticket_still_open`: customer indicated the issue was resolved but the ticket is still open.
@@ -359,7 +359,7 @@ Scan open, non-internal tickets with a crash-related tag and flag likely QA/proc
   - searches `tag=<value>` with `status:open`
   - excludes `pending`, `solved`, and `closed`
   - excludes `internal` when `exclude_internal=true`
-  - fetches full ticket details and comments for all candidates in parallel (up to 10 concurrent requests); individual ticket failures are logged and skipped rather than aborting the scan
+  - fetches full ticket details, comments, and ticket metrics for all candidates in parallel (up to 10 concurrent requests); individual ticket failures are logged and skipped rather than aborting the scan
 
 - Output:
   - Structured result with `tag`, `scanned_count`, `in_trouble_count`, `total_matches`, `retrieved_count`, `truncated`, `ticket_list_markdown`, and per-ticket trouble assessments.

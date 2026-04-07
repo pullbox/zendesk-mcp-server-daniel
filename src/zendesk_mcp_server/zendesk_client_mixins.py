@@ -92,6 +92,19 @@ class ZendeskReadMixin:
         except Exception as e:
             raise Exception(f"Failed to fetch knowledge base: {str(e)}")
 
+    def get_ticket_metrics(self, ticket_id: int) -> Dict[str, Any] | None:
+        """
+        Fetch ticket metrics for a specific ticket.
+        Returns None on failure so callers can fall back gracefully.
+        """
+        try:
+            url = f"{self.base_url}/tickets/{ticket_id}/metrics"
+            payload = self._json_get(url)
+            return payload.get("ticket_metric")
+        except Exception as e:
+            logger.warning(f"Failed to fetch metrics for ticket {ticket_id}: {e}")
+            return None
+
     def get_user(self, user_id: int) -> Dict[str, Any]:
         """
         Fetch a Zendesk user by ID.

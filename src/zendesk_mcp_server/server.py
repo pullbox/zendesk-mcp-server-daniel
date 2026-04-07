@@ -2437,6 +2437,7 @@ def _build_ticket_trouble_assessment(
     comments: list[dict[str, Any]],
     initial_response_sla_minutes: int,
     high_priority_stale_hours: int,
+    ticket_metrics: dict[str, Any] | None = None,
 ) -> TicketTroubleAssessment:
     flags: list[TicketTroubleFlag] = []
 
@@ -2594,39 +2595,76 @@ def _build_ticket_trouble_assessment(
             )
         )
 
-    first_public_agent_response_at: datetime | None = None
-    for comment in public_comments_sorted:
-        author_id = comment.get("author_id")
-        if requester_id is not None and author_id == requester_id:
-            continue
-        first_public_agent_response_at = _parse_iso_datetime(comment.get("created_at"))
-        if first_public_agent_response_at is not None:
-            break
+    # Prefer reply_time_in_minutes.calendar from ticket metrics (authoritative, avoids comment scanning).
+    # Fall back to scanning public comments when metrics are unavailable.
+    metrics_reply_calendar: int | None = None
+    if ticket_metrics is not None:
+        rtime = ticket_metrics.get("reply_time_in_minutes") or {}
+        raw_calendar = rtime.get("calendar")
+        if raw_calendar is not None:
+            metrics_reply_calendar = int(raw_calendar)
 
-    if created_at is not None and first_public_agent_response_at is None and not has_internal_first_comment:
-        reference_time = updated_at or datetime.now(timezone.utc)
-        response_delay_minutes = int(max((reference_time - created_at).total_seconds(), 0) // 60)
-        if response_delay_minutes > initial_response_sla_minutes:
-            flags.append(
-                TicketTroubleFlag(
-                    code="missing_initial_response",
-                    severity="high",
-                    message=(
-                        "No public agent response found after "
-                        f"{_format_minutes(response_delay_minutes)} (SLA {initial_response_sla_minutes}m)."
-                    ),
+    if ticket_metrics is not None and not has_internal_first_comment:
+        if metrics_reply_calendar is None:
+            # Metrics available but no first reply recorded yet
+            if created_at is not None:
+                reference_time = updated_at or datetime.now(timezone.utc)
+                response_delay_minutes = int(max((reference_time - created_at).total_seconds(), 0) // 60)
+                if response_delay_minutes > initial_response_sla_minutes:
+                    flags.append(
+                        TicketTroubleFlag(
+                            code="missing_initial_response",
+                            severity="high",
+                            message=(
+                                "No public agent response found after "
+                                f"{_format_minutes(response_delay_minutes)} (SLA {initial_response_sla_minutes}m)."
+                            ),
+                        )
+                    )
+        else:
+            if metrics_reply_calendar > initial_response_sla_minutes:
+                flags.append(
+                    TicketTroubleFlag(
+                        code="late_initial_response",
+                        severity="high",
+                        message=f"Initial public response took {_format_minutes(metrics_reply_calendar)} (SLA {initial_response_sla_minutes}m).",
+                    )
                 )
-            )
-    elif created_at is not None and first_public_agent_response_at is not None and not has_internal_first_comment:
-        response_minutes = int((first_public_agent_response_at - created_at).total_seconds() // 60)
-        if response_minutes > initial_response_sla_minutes:
-            flags.append(
-                TicketTroubleFlag(
-                    code="late_initial_response",
-                    severity="high",
-                    message=f"Initial public response took {_format_minutes(response_minutes)} (SLA {initial_response_sla_minutes}m).",
+    else:
+        # Metrics unavailable — fall back to comment-scan approach
+        first_public_agent_response_at: datetime | None = None
+        for comment in public_comments_sorted:
+            author_id = comment.get("author_id")
+            if requester_id is not None and author_id == requester_id:
+                continue
+            first_public_agent_response_at = _parse_iso_datetime(comment.get("created_at"))
+            if first_public_agent_response_at is not None:
+                break
+
+        if created_at is not None and first_public_agent_response_at is None and not has_internal_first_comment:
+            reference_time = updated_at or datetime.now(timezone.utc)
+            response_delay_minutes = int(max((reference_time - created_at).total_seconds(), 0) // 60)
+            if response_delay_minutes > initial_response_sla_minutes:
+                flags.append(
+                    TicketTroubleFlag(
+                        code="missing_initial_response",
+                        severity="high",
+                        message=(
+                            "No public agent response found after "
+                            f"{_format_minutes(response_delay_minutes)} (SLA {initial_response_sla_minutes}m)."
+                        ),
+                    )
                 )
-            )
+        elif created_at is not None and first_public_agent_response_at is not None and not has_internal_first_comment:
+            response_minutes = int((first_public_agent_response_at - created_at).total_seconds() // 60)
+            if response_minutes > initial_response_sla_minutes:
+                flags.append(
+                    TicketTroubleFlag(
+                        code="late_initial_response",
+                        severity="high",
+                        message=f"Initial public response took {_format_minutes(response_minutes)} (SLA {initial_response_sla_minutes}m).",
+                    )
+                )
 
     customer_public_comments = [
         c for c in public_comments_sorted if requester_id is not None and c.get("author_id") == requester_id
@@ -3355,11 +3393,13 @@ def get_ticket_summary(
         ticket=ticket,
         comments=comments,
     )
+    ticket_metrics = zendesk_client.get_ticket_metrics(resolved_ticket_id)
     assessment = _build_ticket_trouble_assessment(
         ticket=ticket,
         comments=comments,
         initial_response_sla_minutes=DEFAULT_INITIAL_RESPONSE_SLA_MINUTES,
         high_priority_stale_hours=DEFAULT_HIGH_PRIORITY_STALE_HOURS,
+        ticket_metrics=ticket_metrics,
     )
     summary = _build_ticket_summary(ticket)
     alert_lines = [
@@ -3608,11 +3648,13 @@ def scan_tickets_in_trouble(
         if _is_feature_request_ticket(full_ticket.get("subject")):
             continue
         comments = zendesk_client.get_ticket_comments(int(ticket_id))
+        ticket_metrics = zendesk_client.get_ticket_metrics(int(ticket_id))
         assessment = _build_ticket_trouble_assessment(
             ticket=full_ticket,
             comments=comments,
             initial_response_sla_minutes=initial_response_sla_minutes,
             high_priority_stale_hours=high_priority_stale_hours,
+            ticket_metrics=ticket_metrics,
         )
         status_lower = str(full_ticket.get("status", "")).lower()
         if status_lower == "new":
@@ -3717,22 +3759,23 @@ def scan_crash_tickets_in_trouble(
 
     _log_rate_limit_preflight("scan_crash_tickets_in_trouble", len(open_ticket_ids))
 
-    def _fetch_crash_ticket(tid: int) -> tuple[int, dict, list]:
+    def _fetch_crash_ticket(tid: int) -> tuple[int, dict, list, dict | None]:
         try:
             ticket = _prepare_ticket_payload(tid)
             comments = zendesk_client.get_ticket_comments(tid)
-            return tid, ticket, comments
+            metrics = zendesk_client.get_ticket_metrics(tid)
+            return tid, ticket, comments, metrics
         except Exception as exc:
             raise RuntimeError(f"Failed to fetch ticket {tid}: {exc}") from exc
 
-    raw_crash: dict[int, tuple[dict, list]] = {}
+    raw_crash: dict[int, tuple[dict, list, dict | None]] = {}
     with ThreadPoolExecutor(max_workers=min(len(open_ticket_ids), 10)) as executor:
         futures = {executor.submit(_fetch_crash_ticket, tid): tid for tid in open_ticket_ids}
         for future in as_completed(futures):
             tid = futures[future]
             try:
-                _, ticket, comments = future.result()
-                raw_crash[tid] = (ticket, comments)
+                _, ticket, comments, metrics = future.result()
+                raw_crash[tid] = (ticket, comments, metrics)
             except Exception as exc:
                 logger.warning("Skipping ticket %d — %s", tid, exc)
 
@@ -3740,7 +3783,7 @@ def scan_crash_tickets_in_trouble(
     for tid in open_ticket_ids:
         if tid not in raw_crash:
             continue
-        full_ticket, comments = raw_crash[tid]
+        full_ticket, comments, metrics = raw_crash[tid]
         if str(full_ticket.get("status", "")).lower() != "open":
             continue
         assessments.append(
@@ -3749,6 +3792,7 @@ def scan_crash_tickets_in_trouble(
                 comments=comments,
                 initial_response_sla_minutes=initial_response_sla_minutes,
                 high_priority_stale_hours=high_priority_stale_hours,
+                ticket_metrics=metrics,
             )
         )
 
@@ -3847,22 +3891,23 @@ def get_important_tickets_today(
 
     _log_rate_limit_preflight("get_important_tickets_today", len(candidate_ticket_ids))
 
-    def _fetch_important_ticket(tid: int) -> tuple[int, dict, list]:
+    def _fetch_important_ticket(tid: int) -> tuple[int, dict, list, dict | None]:
         try:
             ticket = _prepare_ticket_payload(tid)
             comments = zendesk_client.get_ticket_comments(tid)
-            return tid, ticket, comments
+            metrics = zendesk_client.get_ticket_metrics(tid)
+            return tid, ticket, comments, metrics
         except Exception as exc:
             raise RuntimeError(f"Failed to fetch ticket {tid}: {exc}") from exc
 
-    raw_important: dict[int, tuple[dict, list]] = {}
+    raw_important: dict[int, tuple[dict, list, dict | None]] = {}
     with ThreadPoolExecutor(max_workers=min(len(candidate_ticket_ids), 10)) as executor:
         futures = {executor.submit(_fetch_important_ticket, tid): tid for tid in candidate_ticket_ids}
         for future in as_completed(futures):
             tid = futures[future]
             try:
-                _, ticket, comments = future.result()
-                raw_important[tid] = (ticket, comments)
+                _, ticket, comments, metrics = future.result()
+                raw_important[tid] = (ticket, comments, metrics)
             except Exception as exc:
                 logger.warning("Skipping ticket %d — %s", tid, exc)
 
@@ -3870,7 +3915,7 @@ def get_important_tickets_today(
     for ticket_id in candidate_ticket_ids:
         if ticket_id not in raw_important:
             continue
-        full_ticket, comments = raw_important[ticket_id]
+        full_ticket, comments, metrics = raw_important[ticket_id]
         if str(full_ticket.get("status", "")).lower() in {"solved", "closed"}:
             continue
         if _is_feature_request_ticket(full_ticket.get("subject")):
@@ -3881,6 +3926,7 @@ def get_important_tickets_today(
                 comments=comments,
                 initial_response_sla_minutes=initial_response_sla_minutes,
                 high_priority_stale_hours=high_priority_stale_hours,
+                ticket_metrics=metrics,
             )
         )
 
