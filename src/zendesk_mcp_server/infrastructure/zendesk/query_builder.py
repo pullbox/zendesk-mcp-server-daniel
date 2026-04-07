@@ -46,6 +46,7 @@ def build_get_tickets_search_query(
     stale_hours: Optional[int],
     include_solved: bool,
     exclude_internal: bool,
+    status: Optional[str],
     now: datetime,
     timestamp_formatter,
 ) -> tuple[str, Optional[str]]:
@@ -69,7 +70,9 @@ def build_get_tickets_search_query(
         stale_dt = now - timedelta(hours=int(stale_hours))
         updated_before = timestamp_formatter(stale_dt)
 
-    if stale_hours is not None and not include_solved:
+    if status:
+        query_parts.append(f"status:{str(status).strip()}")
+    elif stale_hours is not None and not include_solved:
         query_parts.append("status<solved")
 
     if exclude_internal:

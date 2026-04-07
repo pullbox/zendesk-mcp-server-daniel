@@ -79,6 +79,7 @@ class TicketsRepository:
         stale_hours: Optional[int],
         include_solved: bool,
         exclude_internal: bool,
+        status: Optional[str],
         now: datetime,
     ) -> Dict[str, Any]:
         per_page = min(per_page, 100)
@@ -91,6 +92,7 @@ class TicketsRepository:
             or created_last_hours is not None
             or stale_hours is not None
             or exclude_internal
+            or status
         )
 
         if use_search:
@@ -103,6 +105,7 @@ class TicketsRepository:
                 stale_hours=stale_hours,
                 include_solved=include_solved,
                 exclude_internal=exclude_internal,
+                status=status,
                 now=now,
                 timestamp_formatter=self._timestamp_formatter,
             )
@@ -142,6 +145,7 @@ class TicketsRepository:
                     "stale_hours": stale_hours,
                     "include_solved": include_solved,
                     "exclude_internal": exclude_internal,
+                    "status": status,
                 },
                 "has_more": data.get("next_page") is not None,
                 "next_page": page + 1 if data.get("next_page") else None,

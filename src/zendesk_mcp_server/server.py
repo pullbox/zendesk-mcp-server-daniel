@@ -3621,6 +3621,15 @@ def get_tickets(
         bool,
         Field(description="Exclude tickets tagged internal from search results."),
     ] = False,
+    status: Annotated[
+        str | None,
+        Field(
+            description=(
+                "Optional status filter. Valid values: new, open, pending, hold, solved, closed. "
+                "When set, only tickets with that status are returned. Overrides include_solved for status filtering."
+            )
+        ),
+    ] = None,
 ) -> GetTicketsResult:
     tickets = zendesk_client.get_tickets(
         page=page,
@@ -3635,6 +3644,7 @@ def get_tickets(
         stale_hours=stale_hours,
         include_solved=include_solved,
         exclude_internal=exclude_internal,
+        status=status,
     )
     return GetTicketsResult.model_validate(tickets)
 

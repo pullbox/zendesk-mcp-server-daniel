@@ -205,6 +205,7 @@ class ZendeskSearchMixin:
         stale_hours: Optional[int] = None,
         include_solved: bool = False,
         exclude_internal: bool = False,
+        status: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Get tickets with optional filtering.
@@ -225,6 +226,7 @@ class ZendeskSearchMixin:
                 stale_hours=stale_hours,
                 include_solved=include_solved,
                 exclude_internal=exclude_internal,
+                status=status,
                 now=now,
             )
 
