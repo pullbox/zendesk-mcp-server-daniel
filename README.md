@@ -391,6 +391,11 @@ Samples solved tickets and returns a combined ticket-QA input packet for all sam
   - Structured result including sampled ticket ids and `review_input` (rubric + ticket evidence bundle).
   - Also highlights production-impact tickets separately via `production_ticket_ids`, `production_ticket_links`, and `production_ticket_count`.
 
+- QA rubric timeline includes (for `crash_detected`/`anr_yes` tickets):
+  - Time to escalation from ticket creation
+  - Relevant crash data received from customer (first customer comment with stacktrace attachment or inline stacktrace; uses ticket creation timestamp if crash data was present in the original request)
+  - Time from crash data receipt to escalation (delta between crash data received and first escalation; flags as a process gap if either timestamp is missing)
+
 ### get_ticket_comments (`ticket_id`)
 
 Fetch all comments for a ticket, including attachment metadata:

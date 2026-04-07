@@ -132,6 +132,8 @@ Required output:
    - Stacktrace requested:
    - Escalated:
    - Time to escalation from ticket creation:
+   - Relevant crash data received from customer:
+   - Time from crash data receipt to escalation:
    - Solution built:
    - Solution delivered to customer:
    - Customer acknowledgement:
@@ -181,6 +183,8 @@ Rules:
 - For this check, infer crash identification time from the earliest explicit crash evidence in the ticket/comments; if the ticket already has tag "crash_detected" or "anr_yes", use ticket created timestamp when no earlier signal is available.
 - If the first stacktrace request is more than 1 hour after crash identification, explicitly flag "Late stacktrace request (>1h)" in Process Findings.
 - For crash_detected/anr_yes tickets, always calculate and report "Time to escalation from ticket creation" using ticket created timestamp and the first explicit escalation timestamp in the evidence.
+- For crash_detected/anr_yes tickets, determine "Relevant crash data received from customer" as the timestamp of the first customer comment (public reply) that contains a stacktrace attachment (e.g. .ips, .crash, .dmp, or a filename explicitly indicating a crash log) or explicit inline stacktrace content. If crash data was present in the original ticket description, use the ticket created timestamp and note "present at ticket creation". If no crash data was ever provided by the customer, write "Not found".
+- For crash_detected/anr_yes tickets, calculate "Time from crash data receipt to escalation" using the "Relevant crash data received from customer" timestamp and the first explicit escalation timestamp. If either value is "Not found", write "Not found" and flag as a process gap. If crash data was present at ticket creation, this metric equals "Time to escalation from ticket creation".
 - If escalation evidence exists but no escalation timestamp can be determined, write "Not found" and explicitly flag this as a process gap.
 - For crash_detected/anr_yes tickets, if there is evidence of a crash/ANR but the review does not explicitly identify crash/ANR handling in Timeline/Process Findings, explicitly call that out as a critical ticket QA gap.
 - For crash_detected/anr_yes tickets, if there is no stacktrace evidence and no explicit stacktrace/crash-log request, explicitly call that out as a critical ticket QA gap.
