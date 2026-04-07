@@ -135,6 +135,29 @@ Expected output format:
 
 ## Tools
 
+### get_rate_limit_status
+
+Show the current Zendesk API rate limit and how many requests remain in the current minute.
+
+Use this to diagnose MCP timeouts or slowdowns. Rate limit values are read from the `X-Rate-Limit` and `X-Rate-Limit-Remaining` response headers returned by Zendesk on every API call and stored in memory — no extra API request is made.
+
+- Output:
+  - `limit_per_minute` — requests/min allowed by your plan (e.g. 700 for Enterprise)
+  - `remaining` — requests left in the current 60-second window
+  - `used` — requests consumed so far this window
+  - `pct_used` — percentage of the limit consumed
+  - `note` — explanation of when values were last observed
+
+- Plan limits for reference:
+  | Plan | Requests/min |
+  |---|---|
+  | Suite / Support Team | 200 |
+  | Suite / Support Professional | 400 |
+  | Suite / Support Enterprise | 700 |
+  | Enterprise Plus / High Volume add-on | 2500 |
+
+- The server also logs a `WARNING` automatically whenever remaining drops below 10% of the limit, and logs a second warning before bulk scans if the remaining budget may be insufficient to cover the full candidate set.
+
 ### get_ticket (`ticket_id`)
 
 Fetch one ticket with normalized custom field values and tags.
@@ -207,8 +230,8 @@ Find tickets that matter today based on current attention needs, not just creati
   - fetches tickets updated in the last `recent_activity_hours`
   - fetches stale tickets older than `stale_hours`
   - de-duplicates the combined candidate set
-  - runs the existing ticket trouble assessment on each candidate
-  - returns a ranked structured list of tickets that are most likely to need attention now
+  - fetches full ticket details and comments for all candidates in parallel (up to 10 concurrent requests); individual ticket failures are logged and skipped rather than aborting the scan
+  - runs the ticket trouble assessment on each candidate and returns a ranked structured list
 
 - Input:
   - `recent_activity_hours` (integer, optional): Include tickets updated in the last N hours. Default `24`
@@ -336,7 +359,7 @@ Scan open, non-internal tickets with a crash-related tag and flag likely QA/proc
   - searches `tag=<value>` with `status:open`
   - excludes `pending`, `solved`, and `closed`
   - excludes `internal` when `exclude_internal=true`
-  - large result sets can be slow — the scan fetches full ticket details and comments per ticket
+  - fetches full ticket details and comments for all candidates in parallel (up to 10 concurrent requests); individual ticket failures are logged and skipped rather than aborting the scan
 
 - Output:
   - Structured result with `tag`, `scanned_count`, `in_trouble_count`, `total_matches`, `retrieved_count`, `truncated`, `ticket_list_markdown`, and per-ticket trouble assessments.
