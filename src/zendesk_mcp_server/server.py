@@ -726,6 +726,7 @@ TROUBLE_FLAG_WEIGHTS: dict[str, int] = {
     "title_incorrect": 45,
     "production_user_impact": 35,
     "production_priority_mismatch": 55,
+    "regression_detected": 48,
 }
 SEVERITY_FALLBACK_WEIGHTS = {"urgent": 50, "high": 30, "medium": 15, "low": 5}
 SEVERITY_RANK = {"urgent": 4, "high": 3, "medium": 2, "low": 1}
@@ -884,6 +885,22 @@ TRAINING_REQUEST_SIGNAL_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bunderstand\b", re.IGNORECASE),
     re.compile(r"\breview\b", re.IGNORECASE),
     re.compile(r"\btelemetry\b", re.IGNORECASE),
+)
+REGRESSION_SIGNAL_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\bregress(?:ion|ed|ing)?\b", re.IGNORECASE),
+    re.compile(r"\bused\s+to\s+work\b", re.IGNORECASE),
+    re.compile(r"\bworked\s+(?:fine|correctly|before|previously)\b", re.IGNORECASE),
+    re.compile(r"\bworked\s+(?:in|with|on)\s+(?:version\s+|v)?\d", re.IGNORECASE),
+    re.compile(r"\bpreviously\s+work(?:ed|ing|s)?\b", re.IGNORECASE),
+    re.compile(r"\bno\s+longer\s+work(?:s|ing)?\b", re.IGNORECASE),
+    re.compile(r"\bstopped?\s+work(?:ing)?\b", re.IGNORECASE),
+    re.compile(r"\bbroke(?:\s+after|\s+in|\s+with|\s+since|\s+following)?\s+(?:the\s+)?(?:update|upgrade|version|v\d|release|deploy(?:ment)?|migration)\b", re.IGNORECASE),
+    re.compile(r"\bbroken\s+(?:after|since|in|with|following)\b", re.IGNORECASE),
+    re.compile(r"\bafter\s+(?:the\s+)?(?:latest\s+)?(?:update|upgrade|migration|deploy(?:ment)?|release)\b", re.IGNORECASE),
+    re.compile(r"\bsince\s+(?:the\s+)?(?:last\s+)?(?:update|upgrade|version|v\d|release)\b", re.IGNORECASE),
+    re.compile(r"\bsince\s+(?:version\s+|v)\d", re.IGNORECASE),
+    re.compile(r"\b(?:down|roll)(?:grade|back)(?:ed|ing)?\b", re.IGNORECASE),
+    re.compile(r"\bintroduced\s+(?:a\s+)?(?:bug|issue|problem|error|break)\b", re.IGNORECASE),
 )
 TICKET_REPORT_REQUEST_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bticket\s+report\b", re.IGNORECASE),
@@ -1559,6 +1576,30 @@ def _build_customer_urgency_flag(
             f"Evidence: '{match_text}' in {source} at {created_at}."
         )
     return TicketTroubleFlag(code="customer_urgency", severity="high", message=message)
+
+
+def _build_regression_flag(
+    ticket: dict[str, Any],
+    comments: list[dict[str, Any]],
+    requester_id: int | None,
+) -> TicketTroubleFlag | None:
+    hit = _first_pattern_match(ticket, comments, requester_id, REGRESSION_SIGNAL_PATTERNS)
+    if hit is None:
+        return None
+    source, match_text, created_at = hit
+    if source in ("subject", "description"):
+        message = (
+            "Ticket language suggests a regression — a previously working behaviour has broken again; "
+            "confirm the last-known-good state and route to the engineer familiar with recent changes. "
+            f"Evidence: '{match_text}' in ticket {source}."
+        )
+    else:
+        message = (
+            "Customer language suggests a regression — a previously working behaviour has broken again; "
+            "confirm the last-known-good state and route to the engineer familiar with recent changes. "
+            f"Evidence: '{match_text}' in {source} at {created_at}."
+        )
+    return TicketTroubleFlag(code="regression_detected", severity="high", message=message)
 
 
 def _build_ticket_report_request_flag(
@@ -2556,6 +2597,14 @@ def _build_ticket_trouble_assessment(
     )
     if production_priority_mismatch_flag is not None:
         flags.append(production_priority_mismatch_flag)
+
+    regression_flag = _build_regression_flag(
+        ticket=ticket,
+        comments=comments,
+        requester_id=requester_id,
+    )
+    if regression_flag is not None:
+        flags.append(regression_flag)
 
     customer_urgency_flag = _build_customer_urgency_flag(
         ticket=ticket,
