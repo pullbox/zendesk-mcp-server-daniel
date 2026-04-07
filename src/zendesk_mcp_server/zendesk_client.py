@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import threading
 import urllib.request
 from typing import Any, Dict
 
@@ -77,11 +78,58 @@ class ZendeskClient(
         self.field_value_mapper = services.field_value_mapper
         self.users_repository = services.users_repository
 
+        self._rate_limit_lock = threading.Lock()
+        self._rate_limit: int | None = None
+        self._rate_limit_remaining: int | None = None
+
+    def _capture_rate_limit_headers(self, response: Any) -> None:
+        limit = response.getheader("X-Rate-Limit")
+        remaining = response.getheader("X-Rate-Limit-Remaining")
+        with self._rate_limit_lock:
+            if limit is not None:
+                try:
+                    self._rate_limit = int(limit)
+                except ValueError:
+                    pass
+            if remaining is not None:
+                try:
+                    self._rate_limit_remaining = int(remaining)
+                except ValueError:
+                    pass
+        if self._rate_limit is not None and self._rate_limit_remaining is not None:
+            pct_remaining = self._rate_limit_remaining / self._rate_limit
+            if pct_remaining < 0.10:
+                logger.warning(
+                    "Zendesk rate limit critically low: %d / %d requests remaining (%.0f%% used)",
+                    self._rate_limit_remaining,
+                    self._rate_limit,
+                    (1 - pct_remaining) * 100,
+                )
+
+    def get_rate_limit_state(self) -> Dict[str, Any]:
+        """Return the most recently observed rate limit headers from Zendesk."""
+        with self._rate_limit_lock:
+            limit = self._rate_limit
+            remaining = self._rate_limit_remaining
+        used = (limit - remaining) if (limit is not None and remaining is not None) else None
+        pct_used = round((used / limit) * 100, 1) if (used is not None and limit) else None
+        return {
+            "limit_per_minute": limit,
+            "remaining": remaining,
+            "used": used,
+            "pct_used": pct_used,
+            "note": (
+                "Values reflect the last API response received. "
+                "None means no requests have been made yet this session."
+            ),
+        }
+
     def _json_get(self, url: str, timeout: int = 30) -> Dict[str, Any]:
         req = urllib.request.Request(url)
         req.add_header("Authorization", self.auth_header)
         req.add_header("Content-Type", "application/json")
         with urllib.request.urlopen(req, timeout=timeout) as response:
+            self._capture_rate_limit_headers(response)
             return json.loads(response.read().decode())
 
     def _current_utc_now(self) -> datetime:

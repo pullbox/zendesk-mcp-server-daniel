@@ -252,6 +252,38 @@ ticket_field_option_resolver = TicketFieldOptionResolver(zendesk_client)
 ticket_field_option_resolver.load()
 
 
+def _log_rate_limit_preflight(tool_name: str, ticket_count: int) -> None:
+    """Log rate limit state before a bulk parallel fetch so it's visible in logs."""
+    state = zendesk_client.get_rate_limit_state()
+    limit = state["limit_per_minute"]
+    remaining = state["remaining"]
+    if limit is not None and remaining is not None:
+        pct_used = state["pct_used"]
+        log_fn = logger.warning if remaining < limit * 0.20 else logger.info
+        log_fn(
+            "%s: about to fetch %d tickets in parallel — rate limit: %d/%d remaining (%.0f%% used)",
+            tool_name,
+            ticket_count,
+            remaining,
+            limit,
+            pct_used or 0.0,
+        )
+        if remaining < ticket_count * 2:
+            logger.warning(
+                "%s: remaining API budget (%d) may be insufficient for %d tickets "
+                "(each needs ~2 calls). Expect throttling or partial results.",
+                tool_name,
+                remaining,
+                ticket_count,
+            )
+    else:
+        logger.info(
+            "%s: fetching %d candidate tickets in parallel (rate limit not yet observed)",
+            tool_name,
+            ticket_count,
+        )
+
+
 def _prepare_ticket_payload(ticket_id: int) -> dict[str, Any]:
     ticket = zendesk_client.get_ticket(ticket_id)
     ticket = apply_ticket_field_displays(ticket, ticket_field_option_resolver)
@@ -630,6 +662,14 @@ class GetImportantTicketsTodayResult(BaseModel):
     in_trouble_count: int
     ticket_list_markdown: str = ""
     tickets: list[TicketTroubleAssessment]
+
+
+class RateLimitStatus(BaseModel):
+    limit_per_minute: int | None
+    remaining: int | None
+    used: int | None
+    pct_used: float | None
+    note: str
 
 
 class UnansweredTicketEntry(BaseModel):
@@ -3209,6 +3249,20 @@ def review_ticket_title_prompt(
     )
 
 
+@mcp.tool(
+    name="get_rate_limit_status",
+    description=(
+        "Show the current Zendesk API rate limit and how many requests remain in the current minute. "
+        "Use this to diagnose timeouts or slowdowns — if remaining is near 0, scans are being throttled. "
+        "Values are from the last X-Rate-Limit / X-Rate-Limit-Remaining headers received."
+    ),
+    structured_output=True,
+)
+def get_rate_limit_status() -> RateLimitStatus:
+    state = zendesk_client.get_rate_limit_state()
+    return RateLimitStatus(**state)
+
+
 @mcp.tool(name="get_ticket", description="Retrieve a Zendesk ticket by its ID")
 def get_ticket(
     ticket_id: Annotated[int, Field(description="The ID of the ticket to retrieve")],
@@ -3655,24 +3709,48 @@ def scan_crash_tickets_in_trouble(
         if esc_result.get("truncated"):
             escalation_truncated = True
 
+    open_ticket_ids = [
+        int(t["id"])
+        for t in all_tickets
+        if str(t.get("status", "")).lower() == "open" and t.get("id") is not None
+    ]
+
+    _log_rate_limit_preflight("scan_crash_tickets_in_trouble", len(open_ticket_ids))
+
+    def _fetch_crash_ticket(tid: int) -> tuple[int, dict, list]:
+        try:
+            ticket = _prepare_ticket_payload(tid)
+            comments = zendesk_client.get_ticket_comments(tid)
+            return tid, ticket, comments
+        except Exception as exc:
+            raise RuntimeError(f"Failed to fetch ticket {tid}: {exc}") from exc
+
+    raw_crash: dict[int, tuple[dict, list]] = {}
+    with ThreadPoolExecutor(max_workers=min(len(open_ticket_ids), 10)) as executor:
+        futures = {executor.submit(_fetch_crash_ticket, tid): tid for tid in open_ticket_ids}
+        for future in as_completed(futures):
+            tid = futures[future]
+            try:
+                _, ticket, comments = future.result()
+                raw_crash[tid] = (ticket, comments)
+            except Exception as exc:
+                logger.warning("Skipping ticket %d — %s", tid, exc)
+
     assessments: list[TicketTroubleAssessment] = []
-    for ticket in all_tickets:
-        if str(ticket.get("status", "")).lower() != "open":
+    for tid in open_ticket_ids:
+        if tid not in raw_crash:
             continue
-        ticket_id = ticket.get("id")
-        if ticket_id is None:
-            continue
-        full_ticket = _prepare_ticket_payload(int(ticket_id))
+        full_ticket, comments = raw_crash[tid]
         if str(full_ticket.get("status", "")).lower() != "open":
             continue
-        comments = zendesk_client.get_ticket_comments(int(ticket_id))
-        assessment = _build_ticket_trouble_assessment(
-            ticket=full_ticket,
-            comments=comments,
-            initial_response_sla_minutes=initial_response_sla_minutes,
-            high_priority_stale_hours=high_priority_stale_hours,
+        assessments.append(
+            _build_ticket_trouble_assessment(
+                ticket=full_ticket,
+                comments=comments,
+                initial_response_sla_minutes=initial_response_sla_minutes,
+                high_priority_stale_hours=high_priority_stale_hours,
+            )
         )
-        assessments.append(assessment)
 
     _enrich_assessments_with_ai(assessments)
     assessments = _sort_ticket_assessments_by_importance(assessments)
@@ -3767,14 +3845,36 @@ def get_important_tickets_today(
             seen_ticket_ids.add(normalized_ticket_id)
             candidate_ticket_ids.append(normalized_ticket_id)
 
+    _log_rate_limit_preflight("get_important_tickets_today", len(candidate_ticket_ids))
+
+    def _fetch_important_ticket(tid: int) -> tuple[int, dict, list]:
+        try:
+            ticket = _prepare_ticket_payload(tid)
+            comments = zendesk_client.get_ticket_comments(tid)
+            return tid, ticket, comments
+        except Exception as exc:
+            raise RuntimeError(f"Failed to fetch ticket {tid}: {exc}") from exc
+
+    raw_important: dict[int, tuple[dict, list]] = {}
+    with ThreadPoolExecutor(max_workers=min(len(candidate_ticket_ids), 10)) as executor:
+        futures = {executor.submit(_fetch_important_ticket, tid): tid for tid in candidate_ticket_ids}
+        for future in as_completed(futures):
+            tid = futures[future]
+            try:
+                _, ticket, comments = future.result()
+                raw_important[tid] = (ticket, comments)
+            except Exception as exc:
+                logger.warning("Skipping ticket %d — %s", tid, exc)
+
     assessments: list[TicketTroubleAssessment] = []
     for ticket_id in candidate_ticket_ids:
-        full_ticket = _prepare_ticket_payload(ticket_id)
+        if ticket_id not in raw_important:
+            continue
+        full_ticket, comments = raw_important[ticket_id]
         if str(full_ticket.get("status", "")).lower() in {"solved", "closed"}:
             continue
         if _is_feature_request_ticket(full_ticket.get("subject")):
             continue
-        comments = zendesk_client.get_ticket_comments(ticket_id)
         assessments.append(
             _build_ticket_trouble_assessment(
                 ticket=full_ticket,
