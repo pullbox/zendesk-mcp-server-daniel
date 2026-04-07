@@ -145,12 +145,12 @@ Required output:
    - Replication path video:
    - Other crash-related attachments:
    Use exact attachment filenames when available. Otherwise write "Not found".
-5. Tom Tovar Comment Check
+5. CEO Comment Check
    Report each item on its own line:
-   - Tom commented:
-   - First Tom comment:
-   - Latest Tom comment:
-   - Tom comment summary:
+   - CEO commented:
+   - First CEO comment:
+   - Latest CEO comment:
+   - CEO comment summary:
    Use ticket metadata fields (tom_tovar_*) and comments as evidence.
 6. Process Findings
    List concrete ticket-level observations about documented process completeness or gaps based on evidence from the ticket and comments.
@@ -159,7 +159,7 @@ Required output:
    Focus on documented strengths, missing evidence, and follow-up items.
 
 Rules:
-- Ticket Title is formated correctly.
+- Ticket Title is formatted correctly.
 - Escalated Tickets are tickets where the Escalation Status field is populated.
 - Do not use external assumptions or general policy knowledge unless explicitly present in the ticket.
 - Do not treat missing evidence as completed work.
@@ -245,6 +245,13 @@ def _hydrate_ticket_user_fields(ticket: dict[str, Any]) -> None:
     ticket["requester_email"] = requester.get("email") if requester else None
     ticket["assignee_name"] = assignee.get("name") if assignee else None
     ticket["assignee_email"] = assignee.get("email") if assignee else None
+
+
+def _sort_comments_by_time(comments: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return sorted(
+        comments,
+        key=lambda c: _parse_iso_datetime(c.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc),
+    )
 
 
 def _hydrate_comment_author_fields(comments: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -496,6 +503,7 @@ class CrashAttachmentSummary(BaseModel):
     replication_videos: list[str] = Field(default_factory=list)
     crash_related_files: list[str] = Field(default_factory=list)
     signals: list[CrashAttachmentSignal] = Field(default_factory=list)
+    note: str | None = None
 
 
 class ProductionImpactAssessment(BaseModel):
@@ -740,7 +748,7 @@ CRASH_ATTACHMENT_KEYWORDS = (
 VIDEO_ATTACHMENT_EXTENSIONS = (".mp4", ".mov", ".m4v", ".avi", ".webm", ".mkv")
 IMAGE_ATTACHMENT_EXTENSIONS = (".jpg", ".jpeg", ".png", ".heic", ".heif", ".gif", ".bmp", ".webp")
 TOM_TOVAR_USER_ID = 4293579406
-TOM_TOVAR_COMMENT_MARKER = "⚠️ Tom Tovar (id=4293579406) commented on this ticket."
+TOM_TOVAR_COMMENT_MARKER = "⚠️ CEO commented on this ticket."
 PRODUCTION_SIGNAL_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\bprod(?:uction)?\b", re.IGNORECASE), "Mentions production environment."),
     (
@@ -1556,7 +1564,8 @@ def _build_production_impact_assessment(
         )
 
     for index, comment in enumerate(comments, start=1):
-        text = " ".join(filter(None, [str(comment.get("body") or ""), _strip_html(comment.get("html_body"))]))
+        body_text = str(comment.get("body") or "").strip()
+        text = body_text if body_text else _strip_html(comment.get("html_body") or "")
         source = f"comment #{index}"
         for match in _collect_environment_signal_matches(text, PRODUCTION_SIGNAL_PATTERNS, source):
             _append_unique(evidence, match)
@@ -1607,13 +1616,13 @@ def _build_tom_tovar_comment_metadata(comments: list[dict[str, Any]]) -> dict[st
             if len(latest_text) > 160:
                 snippet = f"{snippet}..."
             latest_comment_summary = (
-                f"Tom commented {len(tom_comments)} time(s); "
+                f"CEO commented {len(tom_comments)} time(s); "
                 f"first={first_comment_at or 'Not found'}, latest={latest_comment_at or 'Not found'}; "
                 f"latest note: {snippet}"
             )
         else:
             latest_comment_summary = (
-                f"Tom commented {len(tom_comments)} time(s); "
+                f"CEO commented {len(tom_comments)} time(s); "
                 f"first={first_comment_at or 'Not found'}, latest={latest_comment_at or 'Not found'}."
             )
     return {
@@ -1659,11 +1668,19 @@ def _build_comment_context(
     requester_id: int | None,
     limit: int = 10,
 ) -> list[TicketCommentContextItem]:
-    comments_sorted = sorted(
-        comments,
-        key=lambda c: _parse_iso_datetime(c.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc),
-    )
-    selected_comments = comments_sorted[-max(limit, 1):]
+    """Build a sampled comment context spread evenly across the ticket timeline.
+
+    ``comments`` must be pre-sorted chronologically (use ``_sort_comments_by_time``).
+    """
+    n = len(comments)
+    k = max(limit, 1)
+    if n <= k:
+        selected_comments = comments
+    elif k == 1:
+        selected_comments = [comments[-1]]
+    else:
+        indices = sorted({round(i * (n - 1) / (k - 1)) for i in range(k)})
+        selected_comments = [comments[i] for i in indices]
     context: list[TicketCommentContextItem] = []
     for comment in selected_comments:
         context.append(
@@ -1683,11 +1700,11 @@ def _build_first_comment_context(
     comments: list[dict[str, Any]],
     requester_id: int | None,
 ) -> TicketOpeningContextItem | None:
-    comments_sorted = sorted(
-        comments,
-        key=lambda c: _parse_iso_datetime(c.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc),
-    )
-    first_public_comment = next((comment for comment in comments_sorted if comment.get("public")), None)
+    """Return context for the first public comment on the ticket.
+
+    ``comments`` must be pre-sorted chronologically (use ``_sort_comments_by_time``).
+    """
+    first_public_comment = next((comment for comment in comments if comment.get("public")), None)
     if first_public_comment is not None:
         return TicketOpeningContextItem(
             created_at=first_public_comment.get("created_at"),
@@ -2023,9 +2040,10 @@ def _build_crash_attachment_summary(
     comments: list[dict[str, Any]],
     requester_id: int | None,
     enabled: bool = True,
+    skip_note: str | None = None,
 ) -> CrashAttachmentSummary:
     if not enabled:
-        return CrashAttachmentSummary()
+        return CrashAttachmentSummary(note=skip_note)
 
     signals: list[CrashAttachmentSignal] = []
     stacktrace_files: list[str] = []
@@ -2227,8 +2245,9 @@ def _build_ticket_trouble_assessment(
 
     if is_feature_request:
         tom_tovar_comment_metadata = _build_tom_tovar_comment_metadata(comments)
-        first_comment_context = _build_first_comment_context(ticket=ticket, comments=comments, requester_id=requester_id)
-        comment_context = _build_comment_context(comments=comments, requester_id=requester_id, limit=10)
+        comments_sorted = _sort_comments_by_time(comments)
+        first_comment_context = _build_first_comment_context(ticket=ticket, comments=comments_sorted, requester_id=requester_id)
+        comment_context = _build_comment_context(comments=comments_sorted, requester_id=requester_id, limit=10)
         recent_comment_notes = _extract_recent_comment_notes(comments=comments, requester_id=requester_id)
         engineering_jira_update_summaries = _summarize_engineering_jira_updates(comments)
         return _populate_ticket_report_fields(TicketTroubleAssessment(
@@ -2267,7 +2286,8 @@ def _build_ticket_trouble_assessment(
         ))
 
     public_comments = [c for c in comments if c.get("public")]
-    first_comment_context = _build_first_comment_context(ticket=ticket, comments=comments, requester_id=requester_id)
+    comments_sorted = _sort_comments_by_time(comments)
+    first_comment_context = _build_first_comment_context(ticket=ticket, comments=comments_sorted, requester_id=requester_id)
     crash_tag_reviewed = "crash_reviewed" in tags
     is_unreviewed_crash_ticket = "crash_detected" in tags and not crash_tag_reviewed
     crash_attachment_summary = _build_crash_attachment_summary(
@@ -2396,7 +2416,7 @@ def _build_ticket_trouble_assessment(
     customer_public_comments = [
         c for c in public_comments_sorted if requester_id is not None and c.get("author_id") == requester_id
     ]
-    comment_context = _build_comment_context(comments=comments, requester_id=requester_id, limit=10)
+    comment_context = _build_comment_context(comments=comments_sorted, requester_id=requester_id, limit=10)
     customer_response_flag = _build_customer_comment_response_flag(
         comments=comments,
         requester_id=requester_id,
@@ -3129,7 +3149,7 @@ def get_ticket_summary(
             f"(count={assessment.tom_tovar_comment_count}, latest={assessment.tom_tovar_latest_comment_at or 'Not found'})"
         )
         if assessment.tom_tovar_comment_summary:
-            alert_lines.append(f"Tom Summary: {assessment.tom_tovar_comment_summary}")
+            alert_lines.append(f"CEO Summary: {assessment.tom_tovar_comment_summary}")
     crash_attachments = assessment.crash_attachment_summary
     if crash_attachments is not None:
         alert_lines.append(
@@ -3182,26 +3202,27 @@ def review_ticket(
         ticket["merge_reference_note"] = merge_note
     if resolved_ticket_id != ticket_id:
         ticket["merged_from_ticket_id"] = ticket_id
+    comments_sorted = _sort_comments_by_time(comments)
     ticket.update(_build_tom_tovar_comment_metadata(comments))
     ticket["production_impact"] = _build_production_impact_assessment(ticket=ticket, comments=comments).model_dump()
     ticket_tags = set(ticket.get("tags") or [])
+    requester_id = ticket.get("requester_id")
+    first_comment_ctx = _build_first_comment_context(ticket=ticket, comments=comments_sorted, requester_id=requester_id)
+    crash_reviewed = "crash_reviewed" in ticket_tags
     return build_ticket_analysis_input(
         ticket_id=resolved_ticket_id,
         ticket=ticket,
         comments=comments,
-        first_comment_context=(
-            _build_first_comment_context(ticket=ticket, comments=comments, requester_id=ticket.get("requester_id")).model_dump(mode="json")
-            if _build_first_comment_context(ticket=ticket, comments=comments, requester_id=ticket.get("requester_id")) is not None
-            else {}
-        ),
+        first_comment_context=first_comment_ctx.model_dump(mode="json") if first_comment_ctx is not None else {},
         recent_comment_context=[
             item.model_dump(mode="json")
-            for item in _build_comment_context(comments=comments, requester_id=ticket.get("requester_id"), limit=10)
+            for item in _build_comment_context(comments=comments_sorted, requester_id=requester_id, limit=10)
         ],
         attachment_evidence_summary=_build_crash_attachment_summary(
             comments=comments,
-            requester_id=ticket.get("requester_id"),
-            enabled="crash_detected" in ticket_tags and "crash_reviewed" not in ticket_tags,
+            requester_id=requester_id,
+            enabled="crash_detected" in ticket_tags and not crash_reviewed,
+            skip_note="Attachment scan skipped: ticket is tagged crash_reviewed." if crash_reviewed and "crash_detected" in ticket_tags else None,
         ).model_dump(),
         rubric=TICKET_ANALYSIS_TEMPLATE.format(
             ticket_id=resolved_ticket_id,
@@ -3927,13 +3948,24 @@ def review_random_solved_tickets_for_agent(
         max_pool=max_pool,
     )
 
+    ticket_ids_ordered = [t.id for t in sample_result.tickets if t.id is not None]
+
+    def _fetch_raw(tid: int) -> tuple[int, dict, list]:
+        return tid, _prepare_ticket_payload(tid), zendesk_client.get_ticket_comments(tid)
+
+    with ThreadPoolExecutor(max_workers=min(len(ticket_ids_ordered), 5)) as _executor:
+        _futures = {_executor.submit(_fetch_raw, tid): tid for tid in ticket_ids_ordered}
+        _raw: dict[int, tuple[dict, list]] = {}
+        for _fut in as_completed(_futures):
+            _tid, _ticket, _comments = _fut.result()
+            _raw[_tid] = (_ticket, _comments)
+
     reviews = []
     for sampled_ticket in sample_result.tickets:
         ticket_id = sampled_ticket.id
-        if ticket_id is None:
+        if ticket_id is None or ticket_id not in _raw:
             continue
-        ticket = _prepare_ticket_payload(ticket_id)
-        comments = zendesk_client.get_ticket_comments(ticket_id)
+        ticket, comments = _raw[ticket_id]
         resolved_ticket_id, ticket, comments, merge_note = _resolve_merged_ticket_reference(
             ticket_id=ticket_id,
             ticket=ticket,
@@ -3943,29 +3975,29 @@ def review_random_solved_tickets_for_agent(
             ticket["merge_reference_note"] = merge_note
         if resolved_ticket_id != ticket_id:
             ticket["merged_from_ticket_id"] = ticket_id
+        comments_sorted = _sort_comments_by_time(comments)
         ticket.update(_build_tom_tovar_comment_metadata(comments))
         production_impact = _build_production_impact_assessment(ticket=ticket, comments=comments)
         ticket["production_impact"] = production_impact.model_dump()
+        ticket_tags = set(ticket.get("tags") or [])
+        requester_id = ticket.get("requester_id")
+        crash_reviewed = "crash_reviewed" in ticket_tags
+        first_comment_ctx = _build_first_comment_context(ticket=ticket, comments=comments_sorted, requester_id=requester_id)
         reviews.append(
             {
                 "ticket_id": resolved_ticket_id,
                 "ticket": ticket,
-                "first_comment_context": (
-                    _build_first_comment_context(ticket=ticket, comments=comments, requester_id=ticket.get("requester_id")).model_dump(mode="json")
-                    if _build_first_comment_context(ticket=ticket, comments=comments, requester_id=ticket.get("requester_id")) is not None
-                    else {}
-                ),
+                "first_comment_context": first_comment_ctx.model_dump(mode="json") if first_comment_ctx is not None else {},
                 "recent_comment_context": [
                     item.model_dump(mode="json")
-                    for item in _build_comment_context(comments=comments, requester_id=ticket.get("requester_id"), limit=10)
+                    for item in _build_comment_context(comments=comments_sorted, requester_id=requester_id, limit=10)
                 ],
                 "comments": comments,
-                "production_impact": production_impact.model_dump(),
                 "attachment_evidence_summary": _build_crash_attachment_summary(
                     comments=comments,
-                    requester_id=ticket.get("requester_id"),
-                    enabled="crash_detected" in set(ticket.get("tags") or [])
-                    and "crash_reviewed" not in set(ticket.get("tags") or []),
+                    requester_id=requester_id,
+                    enabled="crash_detected" in ticket_tags and not crash_reviewed,
+                    skip_note="Attachment scan skipped: ticket is tagged crash_reviewed." if crash_reviewed and "crash_detected" in ticket_tags else None,
                 ).model_dump(),
             }
         )
