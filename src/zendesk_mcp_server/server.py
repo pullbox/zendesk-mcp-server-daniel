@@ -4610,7 +4610,8 @@ class _AuthStrippingRedirectHandler(urllib.request.HTTPRedirectHandler):
         original_host = urllib.parse.urlparse(req.full_url).netloc
         new_host = urllib.parse.urlparse(newurl).netloc
         if original_host != new_host:
-            new_req.del_header("Authorization")
+            new_req.headers.pop("Authorization", None)
+            new_req.unredirected_hdrs.pop("Authorization", None)
         return new_req
 
 
@@ -4634,6 +4635,7 @@ def _fetch_url_raw(url: str, timeout: int = 30, size_limit: int = _ATTACHMENT_SI
     cross-domain hop for the same reason.
     """
     req = urllib.request.Request(url)
+    req.add_header("User-Agent", "Mozilla/5.0")
     if _is_zendesk_url(url):
         req.add_header("Authorization", zendesk_client.auth_header)
     chunk_size = 64 * 1024  # 64 KB
