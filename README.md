@@ -19,6 +19,7 @@ This server provides a comprehensive integration with Zendesk. It offers:
 - setup credentials in `.env` file, refer to [.env.example](.env.example).
   - **Required:** `ZENDESK_SUBDOMAIN`, `ZENDESK_EMAIL`, `ZENDESK_API_KEY`
   - **Optional:** `ANTHROPIC_API_KEY` — when set, scan tools use Claude Haiku to generate per-ticket narrative summaries from full comment history and augment Python-detected flags with 5 language-sensitive checks (customer urgency, unhappiness, repeated pressure, missing meeting summary, crash process gap). Without it, summaries fall back to flag-based text with 500-char comment snippets. Get a key at [console.anthropic.com](https://console.anthropic.com).
+  - **Optional:** `ATTACHMENT_SAVE_DIR` — base directory where downloaded attachments are saved. Files land at `<ATTACHMENT_SAVE_DIR>/<ticket_id>/<filename>`. Defaults to `~/Downloads/<ticket_id>/<filename>` if not set.
 - configure in Claude desktop:
 
 ```json
@@ -472,3 +473,75 @@ Lists Zendesk ticket fields with:
 - `title`
 - `type`
 - `active`
+
+### get_attachment_content
+
+Download and read the content of one or more ticket attachments. Files are saved to `<ATTACHMENT_SAVE_DIR>/<ticket_id>/` (defaults to `~/Downloads/<ticket_id>/`) so the support rep can review them directly — no second download needed.
+
+- Input:
+  - `ticket_id` (integer, required): The ticket whose attachments to read
+  - `attachment_id` (integer, optional): A specific attachment ID to fetch. When omitted, auto-selects all crash-relevant attachments from the ticket's comments
+  - `filename_filter` (string, optional): Case-insensitive substring filter applied on top of the auto-selection (e.g. `mapping`, `crash`)
+
+- Auto-selection criteria (when `attachment_id` is omitted):
+  - Extensions: `.log` `.txt` `.crash` `.java` `.ips` `.dmp` `.tombstone` `.anr` `.properties`
+  - Filename keywords: `crash`, `stacktrace`, `mapping`, `tombstone`, `hs_err`, `anr`, `exception`, `stack_trace`
+
+- File handling by type:
+  - **Text files** (`.log`, `.txt`, `.crash`, `.java`, etc.) — decoded as UTF-8 and returned in `content`
+  - **ZIP files** — lists all archive members with sizes; extracts and returns any text files inside that are under the 2 MB limit
+  - **Binary files** — noted as binary with an explanation; not decoded
+  - **Files over 2 MB** — skipped immediately; the download is aborted mid-stream (no full transfer occurs)
+
+- Output (`structured_output=True`):
+  - `ticket_id`
+  - `attachments_found` — number of attachments matched
+  - `attachments_fetched` — number successfully downloaded
+  - `notes` — warnings (skips, save failures, no matches)
+  - `results` — list of `AttachmentContent`:
+    - `attachment_id`, `file_name`, `content_type`, `size`
+    - `skipped` / `skip_reason`
+    - `content_type_detected` — `text`, `zip`, `zip_error`, or `binary`
+    - `content` — decoded text (text files)
+    - `members` — archive member list with `name`, `size`, `compressed_size` (zip files)
+    - `extracted_text` — `{member_name: text}` map of extracted text files inside a zip
+    - `saved_path` — absolute path where the raw file was written on disk (e.g. `~/Downloads/12345/crash.log`)
+    - `note` / `error`
+
+### analyze_crash_ticket
+
+Orchestrate a full crash analysis for a ticket. Fetches all ticket data and attachments in one call, deobfuscates stack frames when a mapping file is present, and searches for similar resolved tickets — returning a structured payload for Claude to classify the crash and draft an escalation note.
+
+- Input:
+  - `ticket_id` (integer, required)
+
+- What it does:
+  1. Fetches the full ticket, all comments (sorted chronologically, author-hydrated)
+  2. Collects all attachment metadata grouped by comment; partitions into crash logs vs mapping files
+  3. Downloads crash-relevant attachments and the most recent mapping file (2 MB streaming cap per file); saves all to `<ATTACHMENT_SAVE_DIR>/<ticket_id>/`
+  4. Parses the ProGuard/R8 mapping file inline (no external tooling) and deobfuscates every JVM stack frame found in the crash logs; reports how many frames changed
+  5. If no mapping is present but obfuscation is detected, generates a precise customer ask (e.g. "Please attach the ProGuard/R8 mapping.txt from build X.Y.Z")
+  6. Extracts exception type terms (e.g. `NullPointerException`, `SIGSEGV`) and calls `search_tickets_by_text` for similar resolved tickets
+  7. Detects platform hints from crash content and comment text
+
+- Output (`structured_output=True`):
+  - Ticket metadata: `ticket_id`, `ticket_url`, `ticket_subject`, `ticket_status`, `ticket_priority`, `ticket_tags`, `ticket_custom_fields`
+  - `comments_count`
+  - `attachments_by_comment` — attachment metadata grouped by the comment they came from
+  - `crash_logs` — list of `AttachmentContent` (same shape as `get_attachment_content` results, including `saved_path`)
+  - `mapping_file` — `AttachmentContent` for the mapping file, or `null`
+  - `mapping_parsed` — whether the mapping was successfully parsed
+  - `deobfuscated_frames` — list of `{original, deobfuscated, changed}` for every stack frame found
+  - `obfuscation_detected` — heuristic flag: short class/method names suggest obfuscation
+  - `obfuscation_note` — customer ask to include in reply when mapping is missing but obfuscation is detected
+  - `similar_tickets` — list of `{ticket_id, subject, status, ticket_url, updated_at}` from the similarity search
+  - `search_terms_used` — exception terms used for the similarity search
+  - `platform_hints` — detected platforms: `Android`, `iOS`, `React Native`, `Flutter`, `Native (C/C++)`
+  - `notes` — per-step warnings (skips, download failures, mapping parse notes, search failures)
+
+- Claude uses the returned payload to:
+  - Classify crash type (NPE, ANR, SIGSEGV, OOM, SSL/handshake, ClassNotFoundException, etc.)
+  - Assess Appdome frame involvement vs customer code
+  - Identify obfuscation type and confirm whether deobfuscation succeeded
+  - Cross-reference similar resolved tickets
+  - Draft a structured internal escalation note covering: platform / OS / build config, crash type + deobfuscated top frame, similar ticket matches, mapping/dSYM status, and recommended next action

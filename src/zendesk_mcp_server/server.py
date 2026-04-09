@@ -1,8 +1,12 @@
+import io
 import json
 import logging
 import os
 import random
 import re
+import urllib.error
+import urllib.request
+import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any
@@ -41,6 +45,7 @@ ZENDESK_TICKET_LINK_BASE_URL = os.getenv(
 )
 LOCAL_TIMEZONE = datetime.now().astimezone().tzinfo
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+ATTACHMENT_SAVE_DIR = os.path.expanduser(os.getenv("ATTACHMENT_SAVE_DIR", "~/Downloads"))
 
 ATTRIBUTION_GUARDRAILS = """
 Evidence rules:
@@ -693,6 +698,72 @@ class ScanUnansweredTicketsResult(BaseModel):
     unanswered_count: int
     min_days_threshold: int
     tickets: list[UnansweredTicketEntry]
+
+
+class AttachmentMember(BaseModel):
+    name: str
+    size: int
+    compressed_size: int
+
+
+class AttachmentContent(BaseModel):
+    attachment_id: int
+    file_name: str
+    content_type: str | None = None
+    size: int | None = None
+    skipped: bool = False
+    skip_reason: str | None = None
+    content_type_detected: str | None = None  # "text", "zip", "binary", "zip_error"
+    content: str | None = None
+    members: list[AttachmentMember] | None = None
+    extracted_text: dict[str, str] | None = None
+    note: str | None = None
+    error: str | None = None
+    saved_path: str | None = None
+
+
+class GetAttachmentContentResult(BaseModel):
+    ticket_id: int
+    attachments_found: int
+    attachments_fetched: int
+    results: list[AttachmentContent]
+    notes: list[str] = Field(default_factory=list)
+
+
+class DeobfuscatedFrame(BaseModel):
+    original: str
+    deobfuscated: str
+    changed: bool
+
+
+class SimilarTicketMatch(BaseModel):
+    ticket_id: int
+    subject: str | None
+    status: str | None
+    ticket_url: str | None
+    updated_at: str | None
+
+
+class CrashAnalysisResult(BaseModel):
+    ticket_id: int
+    ticket_url: str | None
+    ticket_subject: str | None
+    ticket_status: str | None
+    ticket_priority: str | None
+    ticket_tags: list[str] = Field(default_factory=list)
+    ticket_custom_fields: dict[str, Any] = Field(default_factory=dict)
+    comments_count: int
+    attachments_by_comment: list[dict[str, Any]] = Field(default_factory=list)
+    crash_logs: list[AttachmentContent] = Field(default_factory=list)
+    mapping_file: AttachmentContent | None = None
+    mapping_parsed: bool = False
+    deobfuscated_frames: list[DeobfuscatedFrame] = Field(default_factory=list)
+    obfuscation_detected: bool = False
+    obfuscation_note: str | None = None
+    similar_tickets: list[SimilarTicketMatch] = Field(default_factory=list)
+    search_terms_used: list[str] = Field(default_factory=list)
+    platform_hints: list[str] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
 
 
 DEFAULT_INITIAL_RESPONSE_SLA_MINUTES = 60
@@ -4486,6 +4557,609 @@ def update_ticket(
     }
     updated = zendesk_client.update_ticket(ticket_id=ticket_id, **update_fields)
     return json.dumps({"message": "Ticket updated successfully", "ticket": updated}, indent=2)
+
+
+# ---------------------------------------------------------------------------
+# Attachment content helpers
+# ---------------------------------------------------------------------------
+
+_CRASH_RELEVANT_EXTENSIONS = frozenset(
+    {".log", ".txt", ".crash", ".java", ".ips", ".dmp", ".tombstone", ".anr", ".properties"}
+)
+_TEXT_EXTENSIONS = frozenset(
+    {
+        ".log", ".txt", ".crash", ".java", ".py", ".swift", ".kt", ".m",
+        ".cpp", ".c", ".ips", ".dmp", ".tombstone", ".anr", ".xml",
+        ".json", ".md", ".properties", ".gradle", ".yaml", ".yml",
+    }
+)
+_CRASH_KEYWORD_RE = re.compile(
+    r"crash|stacktrace|mapping|tombstone|hs_err|anr|exception|stack_trace",
+    re.IGNORECASE,
+)
+_ATTACHMENT_SIZE_LIMIT = 2 * 1024 * 1024  # 2 MB
+
+
+def _is_crash_relevant_attachment(file_name: str) -> bool:
+    name = file_name.lower()
+    base = os.path.basename(name)
+    stem, ext = os.path.splitext(base)
+    if ext in _CRASH_RELEVANT_EXTENSIONS:
+        return True
+    if _CRASH_KEYWORD_RE.search(stem):
+        return True
+    return False
+
+
+class _SizeLimitExceeded(Exception):
+    pass
+
+
+def _fetch_url_raw(url: str, timeout: int = 30, size_limit: int = _ATTACHMENT_SIZE_LIMIT) -> bytes:
+    """Stream-download url, raising _SizeLimitExceeded if bytes read exceeds size_limit."""
+    req = urllib.request.Request(url)
+    req.add_header("Authorization", zendesk_client.auth_header)
+    chunk_size = 64 * 1024  # 64 KB
+    buf = io.BytesIO()
+    total = 0
+    with urllib.request.urlopen(req, timeout=timeout) as response:
+        while True:
+            chunk = response.read(chunk_size)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > size_limit:
+                raise _SizeLimitExceeded(f"Download exceeded {size_limit:,} byte limit (stopped at {total:,} bytes)")
+            buf.write(chunk)
+    return buf.getvalue()
+
+
+def _save_attachment_to_disk(ticket_id: int, file_name: str, data: bytes) -> str:
+    """Write raw bytes to <ATTACHMENT_SAVE_DIR>/<ticket_id>/<file_name>. Returns the saved path."""
+    dest_dir = os.path.join(ATTACHMENT_SAVE_DIR, str(ticket_id))
+    os.makedirs(dest_dir, exist_ok=True)
+    dest_path = os.path.join(dest_dir, file_name)
+    with open(dest_path, "wb") as f:
+        f.write(data)
+    return dest_path
+
+
+def _decode_attachment(file_name: str, data: bytes) -> AttachmentContent:
+    """Return an AttachmentContent with content/members filled in from raw bytes."""
+    ext = os.path.splitext(file_name.lower())[1]
+    result: dict[str, Any] = {}
+
+    if ext == ".zip":
+        try:
+            with zipfile.ZipFile(io.BytesIO(data)) as zf:
+                members = [
+                    AttachmentMember(
+                        name=info.filename,
+                        size=info.file_size,
+                        compressed_size=info.compress_size,
+                    )
+                    for info in zf.infolist()
+                ]
+                extracted: dict[str, str] = {}
+                for info in zf.infolist():
+                    member_ext = os.path.splitext(info.filename.lower())[1]
+                    if member_ext in _TEXT_EXTENSIONS and info.file_size < _ATTACHMENT_SIZE_LIMIT:
+                        try:
+                            extracted[info.filename] = zf.read(info.filename).decode(
+                                "utf-8", errors="replace"
+                            )
+                        except Exception as ex:
+                            extracted[info.filename] = f"[Could not extract: {ex}]"
+                note = (
+                    "ZIP contained no extractable text files (may contain binary dSYM or similar)."
+                    if not extracted
+                    else None
+                )
+                result.update(
+                    content_type_detected="zip",
+                    members=members,
+                    extracted_text=extracted if extracted else None,
+                    note=note,
+                )
+        except Exception as ex:
+            result.update(content_type_detected="zip_error", error=str(ex))
+    else:
+        try:
+            result.update(content_type_detected="text", content=data.decode("utf-8", errors="replace"))
+        except Exception as ex:
+            result.update(content_type_detected="binary", error=f"Could not decode as text: {ex}")
+
+    return result
+
+
+def _collect_ticket_attachments(ticket_id: int) -> list[dict[str, Any]]:
+    """Return a flat list of attachment metadata dicts from all ticket comments."""
+    comments = zendesk_client.get_ticket_comments(ticket_id)
+    attachments: list[dict[str, Any]] = []
+    for comment in comments:
+        for att in comment.get("attachments") or []:
+            if att.get("id") is not None:
+                attachments.append(att)
+    return attachments
+
+
+# ---------------------------------------------------------------------------
+# ProGuard / R8 mapping helpers
+# ---------------------------------------------------------------------------
+
+_PROGUARD_LINE_RANGE_RE = re.compile(r"^\d+:\d+:")
+
+
+def _parse_proguard_mapping(content: str) -> dict[str, dict[str, Any]]:
+    """Parse a ProGuard/R8 mapping file into {obf_class: {real_class, methods, fields}}."""
+    mapping: dict[str, dict[str, Any]] = {}
+    current_obf: str | None = None
+
+    for line in content.splitlines():
+        if not line or line.startswith("#"):
+            continue
+        if not line.startswith(" ") and "->" in line:
+            # Class mapping: "real.Name -> obf.Name:"
+            parts = line.rstrip(":").split(" -> ", 1)
+            if len(parts) == 2:
+                real_cls = parts[0].strip()
+                obf_cls = parts[1].strip()
+                mapping[obf_cls] = {"real_class": real_cls, "methods": {}, "fields": {}}
+                current_obf = obf_cls
+        elif line.startswith(" ") and current_obf is not None and "->" in line:
+            stripped = line.strip()
+            parts = stripped.split(" -> ", 1)
+            if len(parts) != 2:
+                continue
+            obf_name = parts[1].strip()
+            lhs = parts[0].strip()
+            # Strip optional line-range prefix like "10:20:"
+            if _PROGUARD_LINE_RANGE_RE.match(lhs):
+                lhs = lhs.split(":", 2)[-1]
+            # lhs is now "type memberName" or "type methodName(args)"
+            lhs_parts = lhs.split(" ", 1)
+            if len(lhs_parts) == 2:
+                real_member = lhs_parts[1].strip()
+                if "(" in real_member:
+                    mapping[current_obf]["methods"][obf_name] = real_member
+                else:
+                    mapping[current_obf]["fields"][obf_name] = real_member
+
+    return mapping
+
+
+def _deobfuscate_frame(frame: str, mapping: dict[str, dict[str, Any]]) -> str:
+    """Attempt to deobfuscate a single JVM-style stack frame using a parsed mapping."""
+    original = frame
+    frame = frame.strip()
+    prefix = ""
+    if frame.startswith("at "):
+        prefix = "at "
+        frame = frame[3:]
+
+    paren_idx = frame.find("(")
+    method_part = frame[:paren_idx] if paren_idx > 0 else frame
+    source_part = frame[paren_idx:] if paren_idx > 0 else ""
+
+    last_dot = method_part.rfind(".")
+    if last_dot < 0:
+        return original
+
+    class_part = method_part[:last_dot]
+    method_name = method_part[last_dot + 1:]
+
+    if class_part not in mapping:
+        return original
+
+    real_class = mapping[class_part]["real_class"]
+    real_method_full = mapping[class_part]["methods"].get(method_name, method_name)
+    # Strip signature, keep only the method name portion
+    real_method = real_method_full.split("(")[0] if "(" in real_method_full else real_method_full
+    return f"{prefix}{real_class}.{real_method}{source_part}"
+
+
+def _extract_stack_frames(text: str) -> list[str]:
+    """Extract JVM-style stack frames from crash log text."""
+    frames = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("at ") and "(" in stripped:
+            frames.append(stripped)
+    return frames
+
+
+def _detect_obfuscation(frames: list[str]) -> bool:
+    """Heuristic: obfuscated frames have very short class/method names (a.b.c, o0.a)."""
+    if not frames:
+        return False
+    short_name_re = re.compile(r"^at [a-zA-Z]\w*(?:\.[a-zA-Z]\w*){0,3}\.[a-zA-Z]\w*\(")
+    obf_count = sum(
+        1
+        for f in frames
+        if short_name_re.match(f) and len(f.split(".")) <= 5 and all(len(p) <= 3 for p in f.split(".")[:3])
+    )
+    return obf_count > len(frames) * 0.4
+
+
+def _extract_crash_search_terms(comments: list[dict[str, Any]], crash_content: list[str]) -> list[str]:
+    """Extract exception type + top frames for similar-ticket search."""
+    terms: list[str] = []
+    exception_re = re.compile(
+        r"((?:[A-Z][a-zA-Z0-9_]+\.)+(?:[A-Z][a-zA-Z0-9_]*Exception|[A-Z][a-zA-Z0-9_]*Error|ANR|SIGSEGV|SIGABRT|OOM))",
+    )
+    sources = [c.get("body") or "" for c in comments] + crash_content
+    seen: set[str] = set()
+    for text in sources:
+        for match in exception_re.finditer(text):
+            term = match.group(1)
+            if term not in seen:
+                seen.add(term)
+                terms.append(term)
+    # Limit to top 3 most specific terms
+    return sorted(terms, key=len, reverse=True)[:3]
+
+
+def _detect_platform_hints(comments: list[dict[str, Any]], crash_content: list[str]) -> list[str]:
+    """Detect platform from crash content and ticket comments."""
+    all_text = " ".join((c.get("body") or "") for c in comments) + " ".join(crash_content)
+    hints: list[str] = []
+    checks = [
+        (r"android|dalvik|\.dex|\.apk|kotlin", "Android"),
+        (r"ios|swift|objc|objective-c|\.ipa|\.crash|xcode|atos|dSYM", "iOS"),
+        (r"react.?native|hermes|javascript", "React Native"),
+        (r"flutter|dart", "Flutter"),
+        (r"SIGSEGV|SIGABRT|native.*crash|jni.*crash|ndk", "Native (C/C++)"),
+    ]
+    for pattern, platform in checks:
+        if re.search(pattern, all_text, re.IGNORECASE):
+            hints.append(platform)
+    return hints
+
+
+# ---------------------------------------------------------------------------
+# Tool: get_attachment_content
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool(
+    name="get_attachment_content",
+    description=(
+        "Download and read the content of one or more ticket attachments. "
+        "For text files (.log, .txt, .crash, .java, etc.) returns the decoded text. "
+        "For .zip files lists archive members and extracts any text files inside. "
+        "Files over 2 MB are skipped with an explanatory note. "
+        "If attachment_id is omitted, auto-selects crash-relevant attachments "
+        "(by extension or filename keywords: crash, stacktrace, mapping, tombstone, anr, hs_err)."
+    ),
+    structured_output=True,
+)
+def get_attachment_content(
+    ticket_id: Annotated[int, Field(description="The ticket whose attachments to read")],
+    attachment_id: Annotated[
+        int | None,
+        Field(description="Specific attachment ID to fetch. If omitted, auto-selects crash-relevant attachments."),
+    ] = None,
+    filename_filter: Annotated[
+        str | None,
+        Field(description="Optional substring to filter attachment filenames (case-insensitive)."),
+    ] = None,
+) -> GetAttachmentContentResult:
+    notes: list[str] = []
+
+    if attachment_id is not None:
+        # Fetch a specific attachment by ID via the attachments API
+        try:
+            meta = zendesk_client._json_get(f"{zendesk_client.base_url}/attachments/{attachment_id}.json")
+            att = meta.get("attachment", meta)
+            candidates = [
+                {
+                    "id": att.get("id", attachment_id),
+                    "file_name": att.get("file_name", f"attachment_{attachment_id}"),
+                    "content_type": att.get("content_type"),
+                    "content_url": att.get("content_url"),
+                    "size": att.get("size"),
+                }
+            ]
+        except Exception as ex:
+            notes.append(f"Could not fetch attachment metadata for id {attachment_id}: {ex}")
+            candidates = []
+    else:
+        candidates = _collect_ticket_attachments(ticket_id)
+        # Filter to crash-relevant attachments
+        candidates = [a for a in candidates if _is_crash_relevant_attachment(a.get("file_name", ""))]
+        if not candidates:
+            notes.append("No crash-relevant attachments found in ticket comments.")
+
+    # Apply optional filename filter
+    if filename_filter:
+        fl = filename_filter.lower()
+        candidates = [a for a in candidates if fl in (a.get("file_name") or "").lower()]
+        if not candidates:
+            notes.append(f"No attachments matched filename_filter={filename_filter!r}.")
+
+    results: list[AttachmentContent] = []
+    for att in candidates:
+        att_id = att.get("id", 0)
+        file_name = att.get("file_name", f"attachment_{att_id}")
+        size = att.get("size")
+        content_url = att.get("content_url")
+
+        base_fields = dict(
+            attachment_id=att_id,
+            file_name=file_name,
+            content_type=att.get("content_type"),
+            size=size,
+        )
+
+        if size is not None and size > _ATTACHMENT_SIZE_LIMIT:
+            results.append(
+                AttachmentContent(
+                    **base_fields,
+                    skipped=True,
+                    skip_reason=f"File size {size:,} bytes exceeds 2 MB limit.",
+                )
+            )
+            continue
+
+        if not content_url:
+            results.append(
+                AttachmentContent(
+                    **base_fields,
+                    skipped=True,
+                    skip_reason="No content_url available for this attachment.",
+                )
+            )
+            continue
+
+        try:
+            raw = _fetch_url_raw(content_url)
+        except _SizeLimitExceeded as ex:
+            results.append(AttachmentContent(**base_fields, skipped=True, skip_reason=str(ex)))
+            continue
+        except Exception as ex:
+            results.append(AttachmentContent(**base_fields, skipped=True, skip_reason=f"Failed to download: {ex}"))
+            continue
+
+        decoded = _decode_attachment(file_name, raw)
+        saved_path: str | None = None
+        try:
+            saved_path = _save_attachment_to_disk(ticket_id, file_name, raw)
+        except Exception as ex:
+            notes.append(f"Could not save {file_name} to disk: {ex}")
+        results.append(AttachmentContent(**base_fields, **decoded, saved_path=saved_path))
+
+    return GetAttachmentContentResult(
+        ticket_id=ticket_id,
+        attachments_found=len(candidates),
+        attachments_fetched=sum(1 for r in results if not r.skipped),
+        results=results,
+        notes=notes,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Tool: analyze_crash_ticket
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool(
+    name="analyze_crash_ticket",
+    description=(
+        "Orchestrate a full crash analysis for a Zendesk ticket. "
+        "Fetches the ticket, all comments, and downloads crash-relevant attachments. "
+        "Parses ProGuard/R8 mapping files and deobfuscates stack frames when a mapping is present. "
+        "Searches for similar resolved tickets by exception type and key frames. "
+        "Returns a structured payload for Claude to classify the crash, assess Appdome frame involvement, "
+        "and draft an escalation note."
+    ),
+    structured_output=True,
+)
+def analyze_crash_ticket(
+    ticket_id: Annotated[int, Field(description="The ID of the crash ticket to analyze")],
+) -> CrashAnalysisResult:
+    notes: list[str] = []
+
+    # Step 1: fetch ticket and comments
+    ticket = _prepare_ticket_payload(ticket_id)
+    comments = zendesk_client.get_ticket_comments(ticket_id)
+    comments = _sort_comments_by_time(comments)
+    comments = _hydrate_comment_author_fields(comments)
+
+    # Step 2: collect all attachment metadata grouped by comment
+    attachments_by_comment: list[dict[str, Any]] = []
+    all_attachments: list[dict[str, Any]] = []
+    for comment in comments:
+        atts = comment.get("attachments") or []
+        if atts:
+            attachments_by_comment.append(
+                {
+                    "comment_id": comment.get("id"),
+                    "created_at": comment.get("created_at"),
+                    "author_name": comment.get("author_name"),
+                    "public": comment.get("public"),
+                    "attachments": atts,
+                }
+            )
+            all_attachments.extend(atts)
+
+    # Partition attachments: mapping files vs crash logs
+    mapping_candidates = [
+        a for a in all_attachments
+        if re.search(r"mapping", (a.get("file_name") or ""), re.IGNORECASE)
+        and os.path.splitext((a.get("file_name") or "").lower())[1] in {".txt", ".map", ""}
+    ]
+    crash_candidates = [
+        a for a in all_attachments
+        if _is_crash_relevant_attachment(a.get("file_name") or "")
+        and a not in mapping_candidates
+    ]
+
+    # Step 2a: download crash logs
+    crash_logs: list[AttachmentContent] = []
+    crash_text_snippets: list[str] = []
+    for att in crash_candidates:
+        att_id = att.get("id", 0)
+        file_name = att.get("file_name", f"attachment_{att_id}")
+        size = att.get("size")
+        content_url = att.get("content_url")
+        base = dict(attachment_id=att_id, file_name=file_name, content_type=att.get("content_type"), size=size)
+
+        if size is not None and size > _ATTACHMENT_SIZE_LIMIT:
+            crash_logs.append(AttachmentContent(**base, skipped=True, skip_reason=f"File size {size:,} bytes exceeds 2 MB limit."))
+            notes.append(f"Skipped large crash file: {file_name} ({size:,} bytes)")
+            continue
+        if not content_url:
+            crash_logs.append(AttachmentContent(**base, skipped=True, skip_reason="No content_url available."))
+            continue
+        try:
+            raw = _fetch_url_raw(content_url)
+            decoded = _decode_attachment(file_name, raw)
+            saved_path: str | None = None
+            try:
+                saved_path = _save_attachment_to_disk(ticket_id, file_name, raw)
+            except Exception as save_ex:
+                notes.append(f"Could not save {file_name} to disk: {save_ex}")
+            crash_logs.append(AttachmentContent(**base, **decoded, saved_path=saved_path))
+            if decoded.get("content"):
+                crash_text_snippets.append(decoded["content"])
+            if decoded.get("extracted_text"):
+                crash_text_snippets.extend(decoded["extracted_text"].values())
+        except _SizeLimitExceeded as ex:
+            crash_logs.append(AttachmentContent(**base, skipped=True, skip_reason=str(ex)))
+            notes.append(f"Skipped {file_name}: size limit hit during streaming download.")
+        except Exception as ex:
+            crash_logs.append(AttachmentContent(**base, skipped=True, skip_reason=f"Download failed: {ex}"))
+            notes.append(f"Could not download crash file {file_name}: {ex}")
+
+    if not crash_logs and not crash_text_snippets:
+        notes.append("No crash-relevant attachments were found or successfully downloaded.")
+
+    # Step 2b: download mapping file (take the most recent one)
+    mapping_file: AttachmentContent | None = None
+    mapping_content: str | None = None
+    if mapping_candidates:
+        att = mapping_candidates[-1]
+        att_id = att.get("id", 0)
+        file_name = att.get("file_name", f"mapping_{att_id}.txt")
+        size = att.get("size")
+        content_url = att.get("content_url")
+        base = dict(attachment_id=att_id, file_name=file_name, content_type=att.get("content_type"), size=size)
+        if size is not None and size > _ATTACHMENT_SIZE_LIMIT:
+            mapping_file = AttachmentContent(**base, skipped=True, skip_reason=f"Mapping file {size:,} bytes exceeds 2 MB limit.")
+            notes.append(f"Mapping file too large to parse ({size:,} bytes); deobfuscation skipped.")
+        elif not content_url:
+            mapping_file = AttachmentContent(**base, skipped=True, skip_reason="No content_url for mapping file.")
+        else:
+            try:
+                raw = _fetch_url_raw(content_url)
+                decoded = _decode_attachment(file_name, raw)
+                mapping_content = decoded.get("content")
+                saved_path = None
+                try:
+                    saved_path = _save_attachment_to_disk(ticket_id, file_name, raw)
+                except Exception as save_ex:
+                    notes.append(f"Could not save {file_name} to disk: {save_ex}")
+                mapping_file = AttachmentContent(**base, **decoded, saved_path=saved_path)
+            except _SizeLimitExceeded as ex:
+                mapping_file = AttachmentContent(**base, skipped=True, skip_reason=str(ex))
+                notes.append(f"Mapping file too large to parse (hit limit during streaming); deobfuscation skipped.")
+            except Exception as ex:
+                mapping_file = AttachmentContent(**base, skipped=True, skip_reason=f"Download failed: {ex}")
+                notes.append(f"Could not download mapping file {file_name}: {ex}")
+    else:
+        notes.append("No mapping.txt found in ticket attachments.")
+
+    # Step 4: deobfuscation
+    deobfuscated_frames: list[DeobfuscatedFrame] = []
+    mapping_parsed = False
+    obfuscation_detected = False
+    obfuscation_note: str | None = None
+
+    all_frames = [f for snippet in crash_text_snippets for f in _extract_stack_frames(snippet)]
+    if all_frames:
+        obfuscation_detected = _detect_obfuscation(all_frames)
+
+    if mapping_content:
+        try:
+            parsed_mapping = _parse_proguard_mapping(mapping_content)
+            mapping_parsed = bool(parsed_mapping)
+            for frame in all_frames:
+                deobf = _deobfuscate_frame(frame, parsed_mapping)
+                deobfuscated_frames.append(
+                    DeobfuscatedFrame(original=frame, deobfuscated=deobf, changed=(deobf != frame))
+                )
+            changed_count = sum(1 for f in deobfuscated_frames if f.changed)
+            notes.append(
+                f"ProGuard mapping parsed: {len(parsed_mapping)} classes. "
+                f"Deobfuscated {changed_count}/{len(deobfuscated_frames)} frames."
+            )
+        except Exception as ex:
+            notes.append(f"Failed to parse mapping file: {ex}")
+    elif obfuscation_detected:
+        obfuscation_note = (
+            "Stack frames appear obfuscated (short class/method names detected). "
+            "Please attach the ProGuard/R8 mapping.txt from the build that produced this crash."
+        )
+        # Try to identify version from ticket for the ask
+        subject = ticket.get("subject") or ""
+        version_match = re.search(r"\d+\.\d+\.\d+", subject)
+        if version_match:
+            obfuscation_note += f" Build version hint from subject: {version_match.group()}."
+
+    # Step 5: search for similar tickets
+    search_terms = _extract_crash_search_terms(comments, crash_text_snippets)
+    similar_tickets: list[SimilarTicketMatch] = []
+    if search_terms:
+        try:
+            phrase = " ".join(search_terms[:2])
+            search_result = zendesk_client.search_tickets_by_text(
+                phrase=phrase,
+                per_page=10,
+                include_solved=True,
+                sort_by="updated_at",
+                sort_order="desc",
+            )
+            for t in search_result.get("tickets", []):
+                tid = t.get("id")
+                if tid and int(tid) != ticket_id:
+                    similar_tickets.append(
+                        SimilarTicketMatch(
+                            ticket_id=int(tid),
+                            subject=t.get("subject"),
+                            status=t.get("status"),
+                            ticket_url=_ticket_url(int(tid)),
+                            updated_at=t.get("updated_at"),
+                        )
+                    )
+        except Exception as ex:
+            notes.append(f"Similar-ticket search failed: {ex}")
+    else:
+        notes.append("Could not extract exception terms for similar-ticket search; no crash log content available.")
+
+    # Platform hints
+    platform_hints = _detect_platform_hints(comments, crash_text_snippets)
+
+    return CrashAnalysisResult(
+        ticket_id=ticket_id,
+        ticket_url=_ticket_url(ticket_id),
+        ticket_subject=ticket.get("subject"),
+        ticket_status=ticket.get("status"),
+        ticket_priority=ticket.get("priority"),
+        ticket_tags=ticket.get("tags") or [],
+        ticket_custom_fields=ticket.get("custom_fields") or {},
+        comments_count=len(comments),
+        attachments_by_comment=attachments_by_comment,
+        crash_logs=crash_logs,
+        mapping_file=mapping_file,
+        mapping_parsed=mapping_parsed,
+        deobfuscated_frames=deobfuscated_frames,
+        obfuscation_detected=obfuscation_detected,
+        obfuscation_note=obfuscation_note,
+        similar_tickets=similar_tickets,
+        search_terms_used=search_terms,
+        platform_hints=platform_hints,
+        notes=notes,
+    )
 
 
 @mcp.resource(
