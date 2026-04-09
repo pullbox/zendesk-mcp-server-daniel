@@ -5,6 +5,7 @@ import os
 import random
 import re
 import urllib.error
+import urllib.parse
 import urllib.request
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -4595,14 +4596,50 @@ class _SizeLimitExceeded(Exception):
     pass
 
 
+class _AuthStrippingRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Follow redirects but drop the Authorization header when the domain changes.
+
+    Zendesk content_url redirects to a CDN (CloudFront/S3). The CDN URL is
+    pre-signed — forwarding Basic Auth on top of the pre-signed URL causes a 403.
+    """
+
+    def redirect_request(self, req: urllib.request.Request, fp, code, msg, headers, newurl):  # type: ignore[override]
+        new_req = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new_req is None:
+            return None
+        original_host = urllib.parse.urlparse(req.full_url).netloc
+        new_host = urllib.parse.urlparse(newurl).netloc
+        if original_host != new_host:
+            new_req.del_header("Authorization")
+        return new_req
+
+
+_attachment_opener = urllib.request.build_opener(_AuthStrippingRedirectHandler)
+
+
+def _is_zendesk_url(url: str) -> bool:
+    """Return True only if the URL is on our Zendesk subdomain."""
+    host = urllib.parse.urlparse(url).netloc.lower()
+    zendesk_host = f"{zendesk_client.subdomain}.zendesk.com"
+    return host == zendesk_host or host.endswith(f".{zendesk_host}")
+
+
 def _fetch_url_raw(url: str, timeout: int = 30, size_limit: int = _ATTACHMENT_SIZE_LIMIT) -> bytes:
-    """Stream-download url, raising _SizeLimitExceeded if bytes read exceeds size_limit."""
+    """Stream-download url, raising _SizeLimitExceeded if bytes read exceeds size_limit.
+
+    Per Zendesk best practices (developer.zendesk.com/documentation/api-basics/
+    best-practices/working-with-url-properties/): content_url can point to an
+    external host even before any redirect, so credentials are only sent when the
+    URL is on our Zendesk subdomain. The redirect handler strips auth on any
+    cross-domain hop for the same reason.
+    """
     req = urllib.request.Request(url)
-    req.add_header("Authorization", zendesk_client.auth_header)
+    if _is_zendesk_url(url):
+        req.add_header("Authorization", zendesk_client.auth_header)
     chunk_size = 64 * 1024  # 64 KB
     buf = io.BytesIO()
     total = 0
-    with urllib.request.urlopen(req, timeout=timeout) as response:
+    with _attachment_opener.open(req, timeout=timeout) as response:
         while True:
             chunk = response.read(chunk_size)
             if not chunk:
