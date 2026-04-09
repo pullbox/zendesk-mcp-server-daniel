@@ -519,6 +519,7 @@ Orchestrate a full crash analysis for a ticket. Fetches all ticket data and atta
   1. Fetches the full ticket, all comments (sorted chronologically, author-hydrated)
   2. Collects all attachment metadata grouped by comment; partitions into crash logs vs mapping files
   3. Downloads crash-relevant attachments and the most recent mapping file (2 MB streaming cap per file); saves all to `<ATTACHMENT_SAVE_DIR>/<ticket_id>/`
+  3a. Extracts the Appdome **Build ID / Task ID / Fused App Token** from comments and decrypted device log content — this unique ID identifies the exact build and is required to retrieve the correct mapping file or dSYM from Appdome. If not found, generates a customer ask.
   4. Parses the ProGuard/R8 mapping file inline (no external tooling) and deobfuscates every JVM stack frame found in the crash logs; reports how many frames changed
   5. If no mapping is present but obfuscation is detected, generates a precise customer ask (e.g. "Please attach the ProGuard/R8 mapping.txt from build X.Y.Z")
   6. Extracts exception type terms (e.g. `NullPointerException`, `SIGSEGV`) and calls `search_tickets_by_text` for similar resolved tickets
@@ -534,6 +535,8 @@ Orchestrate a full crash analysis for a ticket. Fetches all ticket data and atta
   - `deobfuscated_frames` — list of `{original, deobfuscated, changed}` for every stack frame found
   - `obfuscation_detected` — heuristic flag: short class/method names suggest obfuscation
   - `obfuscation_note` — customer ask to include in reply when mapping is missing but obfuscation is detected
+  - `appdome_build_id` — the Appdome Task ID / Build ID / Fused App Token extracted from comments or device logs; required to download the correct mapping file or dSYM for this specific build. `null` if not found — a prompt to ask the customer is added to `notes`.
+  - `appdome_build_id_source` — where the build ID was found (e.g. comment author/timestamp, crash log index)
   - `similar_tickets` — list of `{ticket_id, subject, status, ticket_url, updated_at}` from the similarity search
   - `search_terms_used` — exception terms used for the similarity search
   - `platform_hints` — detected platforms: `Android`, `iOS`, `React Native`, `Flutter`, `Native (C/C++)`

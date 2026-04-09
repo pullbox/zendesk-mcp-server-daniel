@@ -754,6 +754,9 @@ class CrashAnalysisResult(BaseModel):
     ticket_tags: list[str] = Field(default_factory=list)
     ticket_custom_fields: dict[str, Any] = Field(default_factory=dict)
     comments_count: int
+    # Appdome build identification — required to pull the correct mapping/dSYM
+    appdome_build_id: str | None = None
+    appdome_build_id_source: str | None = None  # where it was found
     attachments_by_comment: list[dict[str, Any]] = Field(default_factory=list)
     crash_logs: list[AttachmentContent] = Field(default_factory=list)
     mapping_file: AttachmentContent | None = None
@@ -4838,6 +4841,72 @@ def _extract_crash_search_terms(comments: list[dict[str, Any]], crash_content: l
     return sorted(terms, key=len, reverse=True)[:3]
 
 
+def _extract_appdome_build_id(
+    comments: list[dict[str, Any]], crash_content: list[str]
+) -> tuple[str | None, str | None]:
+    """Search comments and crash log text for an Appdome Build ID / Task ID / Fused App Token.
+
+    Returns (build_id, source_description) or (None, None) if not found.
+
+    Appdome uses several names for the same unique build identifier:
+    - "Task ID" / "TaskID" — in comments and support notes
+    - "Build ID" / "BuildID" — in comments and console output
+    - "Fused App Token" / "Fused App token" — in decrypted device logs
+
+    The value is typically a UUID (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx) or a
+    long hexadecimal / alphanumeric string.
+    """
+    # UUID pattern: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+    _UUID_RE = re.compile(
+        r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b",
+        re.IGNORECASE,
+    )
+    # Label + value: value must contain at least one digit and be ≥ 16 chars
+    # (prevents matching plain English words like "received" or "attached")
+    _LABEL_RE = re.compile(
+        r"(?:fused\s+app\s+token|task\s*id|build\s*id)\s*[:\-=]?\s*",
+        re.IGNORECASE,
+    )
+    _ID_VALUE_RE = re.compile(r"[0-9a-zA-Z][0-9a-zA-Z\-_]{15,}")  # ≥ 16 chars total
+
+    def _looks_like_id(value: str) -> bool:
+        """Must contain at least one digit and not be a common English word run."""
+        return bool(re.search(r"\d", value))
+
+    def _search_text(text: str, source: str) -> tuple[str | None, str | None]:
+        # Priority 1: UUID anywhere in the text (most unambiguous)
+        for uid_match in _UUID_RE.finditer(text):
+            return uid_match.group(), f"UUID in {source}"
+        # Priority 2: label keyword followed by an ID-like value
+        for label_match in _LABEL_RE.finditer(text):
+            remainder = text[label_match.end():]
+            val_match = _ID_VALUE_RE.match(remainder)
+            if val_match:
+                val = val_match.group().strip()
+                if _looks_like_id(val):
+                    return val, f"label '{label_match.group().strip()}' in {source}"
+        return None, None
+
+    # Search comments first (agents/customers paste it explicitly)
+    for comment in comments:
+        text = comment.get("body") or ""
+        if not re.search(r"fused|task.?id|build.?id|[0-9a-f]{8}-", text, re.IGNORECASE):
+            continue  # skip comments with no relevant signal
+        source = f"comment by {comment.get('author_name') or comment.get('author_id')} at {comment.get('created_at')}"
+        build_id, desc = _search_text(text, source)
+        if build_id:
+            return build_id, desc
+
+    # Then search crash log / device log content
+    for i, snippet in enumerate(crash_content):
+        source = f"crash log (attachment {i + 1})"
+        build_id, desc = _search_text(snippet, source)
+        if build_id:
+            return build_id, desc
+
+    return None, None
+
+
 def _detect_platform_hints(comments: list[dict[str, Any]], crash_content: list[str]) -> list[str]:
     """Detect platform from crash content and ticket comments."""
     all_text = " ".join((c.get("body") or "") for c in comments) + " ".join(crash_content)
@@ -5178,6 +5247,17 @@ def analyze_crash_ticket(
     # Platform hints
     platform_hints = _detect_platform_hints(comments, crash_text_snippets)
 
+    # Appdome Build ID / Task ID / Fused App Token — needed to fetch the correct mapping/dSYM
+    appdome_build_id, appdome_build_id_source = _extract_appdome_build_id(comments, crash_text_snippets)
+    if appdome_build_id:
+        notes.append(f"Appdome Build ID found: {appdome_build_id} (from {appdome_build_id_source})")
+    else:
+        notes.append(
+            "Appdome Build ID not found in comments or crash logs. "
+            "Ask the customer for the Task ID / Build ID / Fused App Token "
+            "to retrieve the correct mapping file or dSYM."
+        )
+
     return CrashAnalysisResult(
         ticket_id=ticket_id,
         ticket_url=_ticket_url(ticket_id),
@@ -5187,6 +5267,8 @@ def analyze_crash_ticket(
         ticket_tags=ticket.get("tags") or [],
         ticket_custom_fields=ticket.get("custom_fields") or {},
         comments_count=len(comments),
+        appdome_build_id=appdome_build_id,
+        appdome_build_id_source=appdome_build_id_source,
         attachments_by_comment=attachments_by_comment,
         crash_logs=crash_logs,
         mapping_file=mapping_file,
