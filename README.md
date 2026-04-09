@@ -489,9 +489,9 @@ Download and read the content of one or more ticket attachments. Files are saved
 
 - File handling by type:
   - **Text files** (`.log`, `.txt`, `.crash`, `.java`, etc.) — decoded as UTF-8 and returned in `content`
-  - **ZIP files** — lists all archive members with sizes; extracts and returns any text files inside that are under the 2 MB limit
+  - **ZIP files** — lists all archive members with sizes; extracts and returns any text files inside that are under the 50 MB limit
   - **Binary files** — noted as binary with an explanation; not decoded
-  - **Files over 2 MB** — skipped immediately; the download is aborted mid-stream (no full transfer occurs)
+  - **Files over 50 MB** — skipped immediately; the download is aborted mid-stream (no full transfer occurs)
 
 - Output (`structured_output=True`):
   - `ticket_id`
@@ -518,7 +518,7 @@ Orchestrate a full crash analysis for a ticket. Fetches all ticket data and atta
 - What it does:
   1. Fetches the full ticket, all comments (sorted chronologically, author-hydrated)
   2. Collects all attachment metadata grouped by comment; partitions into crash logs vs mapping files
-  3. Downloads crash-relevant attachments and the most recent mapping file (2 MB streaming cap per file); saves all to `<ATTACHMENT_SAVE_DIR>/<ticket_id>/`
+  3. Downloads crash-relevant attachments and the most recent mapping file (50 MB streaming cap per file); saves all to `<ATTACHMENT_SAVE_DIR>/<ticket_id>/`
   3a. Extracts the Appdome **Build ID / Task ID / Fused App Token** from comments and decrypted device log content — this unique ID identifies the exact build and is required to retrieve the correct mapping file or dSYM from Appdome. If not found, generates a customer ask.
   4. Parses the ProGuard/R8 mapping file inline (no external tooling) and deobfuscates every JVM stack frame found in the crash logs; reports how many frames changed
   5. If no mapping is present but obfuscation is detected, generates a precise customer ask (e.g. "Please attach the ProGuard/R8 mapping.txt from build X.Y.Z")

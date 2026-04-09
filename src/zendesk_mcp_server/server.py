@@ -4581,7 +4581,7 @@ _CRASH_KEYWORD_RE = re.compile(
     r"crash|stacktrace|mapping|tombstone|hs_err|anr|exception|stack_trace",
     re.IGNORECASE,
 )
-_ATTACHMENT_SIZE_LIMIT = 2 * 1024 * 1024  # 2 MB
+_ATTACHMENT_SIZE_LIMIT = 50 * 1024 * 1024  # 50 MB
 
 
 def _is_crash_relevant_attachment(file_name: str) -> bool:
@@ -4935,7 +4935,7 @@ def _detect_platform_hints(comments: list[dict[str, Any]], crash_content: list[s
         "Download and read the content of one or more ticket attachments. "
         "For text files (.log, .txt, .crash, .java, etc.) returns the decoded text. "
         "For .zip files lists archive members and extracts any text files inside. "
-        "Files over 2 MB are skipped with an explanatory note. "
+        "Files over 50 MB are skipped with an explanatory note. "
         "If attachment_id is omitted, auto-selects crash-relevant attachments "
         "(by extension or filename keywords: crash, stacktrace, mapping, tombstone, anr, hs_err)."
     ),
@@ -5004,7 +5004,7 @@ def get_attachment_content(
                 AttachmentContent(
                     **base_fields,
                     skipped=True,
-                    skip_reason=f"File size {size:,} bytes exceeds 2 MB limit.",
+                    skip_reason=f"File size {size:,} bytes exceeds 50 MB limit.",
                 )
             )
             continue
@@ -5113,7 +5113,7 @@ def analyze_crash_ticket(
         base = dict(attachment_id=att_id, file_name=file_name, content_type=att.get("content_type"), size=size)
 
         if size is not None and size > _ATTACHMENT_SIZE_LIMIT:
-            crash_logs.append(AttachmentContent(**base, skipped=True, skip_reason=f"File size {size:,} bytes exceeds 2 MB limit."))
+            crash_logs.append(AttachmentContent(**base, skipped=True, skip_reason=f"File size {size:,} bytes exceeds 50 MB limit."))
             notes.append(f"Skipped large crash file: {file_name} ({size:,} bytes)")
             continue
         if not content_url:
@@ -5153,7 +5153,7 @@ def analyze_crash_ticket(
         content_url = att.get("content_url")
         base = dict(attachment_id=att_id, file_name=file_name, content_type=att.get("content_type"), size=size)
         if size is not None and size > _ATTACHMENT_SIZE_LIMIT:
-            mapping_file = AttachmentContent(**base, skipped=True, skip_reason=f"Mapping file {size:,} bytes exceeds 2 MB limit.")
+            mapping_file = AttachmentContent(**base, skipped=True, skip_reason=f"Mapping file {size:,} bytes exceeds 50 MB limit.")
             notes.append(f"Mapping file too large to parse ({size:,} bytes); deobfuscation skipped.")
         elif not content_url:
             mapping_file = AttachmentContent(**base, skipped=True, skip_reason="No content_url for mapping file.")
