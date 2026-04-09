@@ -4657,12 +4657,26 @@ def _fetch_url_raw(url: str, timeout: int = 30, size_limit: int = _ATTACHMENT_SI
 
 
 def _save_attachment_to_disk(ticket_id: int, file_name: str, data: bytes) -> str:
-    """Write raw bytes to <ATTACHMENT_SAVE_DIR>/<ticket_id>/<file_name>. Returns the saved path."""
+    """Write raw bytes to <ATTACHMENT_SAVE_DIR>/<ticket_id>/<file_name>.
+
+    For .zip files, also extracts all members into a subfolder named
+    <file_name>/ alongside the zip so the rep can open files directly.
+    Returns the saved path of the zip (or file) itself.
+    """
     dest_dir = os.path.join(ATTACHMENT_SAVE_DIR, str(ticket_id))
     os.makedirs(dest_dir, exist_ok=True)
     dest_path = os.path.join(dest_dir, file_name)
     with open(dest_path, "wb") as f:
         f.write(data)
+
+    if os.path.splitext(file_name.lower())[1] == ".zip":
+        extract_dir = os.path.join(dest_dir, os.path.splitext(file_name)[0])
+        try:
+            with zipfile.ZipFile(io.BytesIO(data)) as zf:
+                zf.extractall(extract_dir)
+        except Exception as ex:
+            logger.warning("Could not extract zip %s to disk: %s", file_name, ex)
+
     return dest_path
 
 

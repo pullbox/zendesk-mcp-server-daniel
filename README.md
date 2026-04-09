@@ -489,7 +489,7 @@ Download and read the content of one or more ticket attachments. Files are saved
 
 - File handling by type:
   - **Text files** (`.log`, `.txt`, `.crash`, `.java`, etc.) — decoded as UTF-8 and returned in `content`
-  - **ZIP files** — lists all archive members with sizes; extracts and returns any text files inside that are under the 50 MB limit
+  - **ZIP files** — lists all archive members with sizes; extracts and returns any text files inside that are under the 50 MB limit. The original `.zip` is saved to disk and all members are also extracted into a subfolder `<zip_name>/` alongside it so the rep can open files directly without unzipping manually
   - **Binary files** — noted as binary with an explanation; not decoded
   - **Files over 50 MB** — skipped immediately; the download is aborted mid-stream (no full transfer occurs)
 
